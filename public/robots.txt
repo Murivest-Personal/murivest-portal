@@ -1,0 +1,10 @@
+# Murivest Private Capital Portal
+# Public marketing surface is crawlable; the authenticated workspace is
+# strictly private and must never be indexed.
+
+User-agent: *
+Disallow: /portal
+Disallow: /api
+Disallow: /reset-password
+
+Sitemap: https://portal.murivest.com/sitemap.xml

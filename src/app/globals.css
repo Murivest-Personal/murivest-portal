@@ -1,0 +1,192 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-inter);
+  --font-display: var(--font-playfair);
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  --color-forest: #1b4332;
+  --color-forest-deep: #0e2a1c;
+  --color-ivory: #faf9f6;
+  --color-gold: #b8956b;
+  --color-gold-deep: #96744f;
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+/* ============================================================
+   MURIVEST DESIGN TOKENS
+   Deep forest #1B4332 · Dark green #0E2A1C · Warm off-white
+   #FAF9F6 · Muted gold #B8956B. Light-first institutional
+   palette; the dark surfaces are used deliberately (landing
+   hero, portal sidebar) rather than as a global dark mode.
+   ============================================================ */
+
+:root {
+  --radius: 0.25rem; /* sharp, editorial corners — private banking, not SaaS */
+
+  --background: #faf9f6;
+  --foreground: #1c2b23;
+
+  --card: #ffffff;
+  --card-foreground: #1c2b23;
+
+  --popover: #ffffff;
+  --popover-foreground: #1c2b23;
+
+  --primary: #1b4332;        /* deep forest green */
+  --primary-foreground: #faf9f6;
+
+  --secondary: #f0ede6;      /* warm parchment */
+  --secondary-foreground: #1b4332;
+
+  --muted: #efeadf;
+  --muted-foreground: #6d7a6f;
+
+  --accent: #f4ecdd;         /* pale gold wash for hover states */
+  --accent-foreground: #1b4332;
+
+  --destructive: #a33636;
+  --destructive-foreground: #faf9f6;
+
+  --border: #e3ded2;
+  --input: #d8d2c4;
+  --ring: #b8956b;           /* muted gold focus */
+
+  --chart-1: #1b4332;
+  --chart-2: #b8956b;
+  --chart-3: #4f7a63;
+  --chart-4: #8aa897;
+  --chart-5: #0e2a1c;
+
+  --sidebar: #0e2a1c;        /* dark green workspace rail */
+  --sidebar-foreground: #e8e6df;
+  --sidebar-primary: #b8956b;
+  --sidebar-primary-foreground: #0e2a1c;
+  --sidebar-accent: #16382a;
+  --sidebar-accent-foreground: #faf9f6;
+  --sidebar-border: rgba(184, 149, 107, 0.25);
+  --sidebar-ring: #b8956b;
+
+  /* Brand shortcuts used across the portal */
+  --forest: #1b4332;
+  --forest-deep: #0e2a1c;
+  --ivory: #faf9f6;
+  --gold: #b8956b;
+  --gold-deep: #96744f;
+}
+
+.dark {
+  --background: #0e2a1c;
+  --foreground: #e8e6df;
+  --card: #12301f;
+  --card-foreground: #e8e6df;
+  --popover: #12301f;
+  --popover-foreground: #e8e6df;
+  --primary: #b8956b;
+  --primary-foreground: #0e2a1c;
+  --secondary: #16382a;
+  --secondary-foreground: #e8e6df;
+  --muted: #16382a;
+  --muted-foreground: #9db1a3;
+  --accent: #16382a;
+  --accent-foreground: #e8e6df;
+  --destructive: #c25252;
+  --border: rgba(232, 230, 223, 0.12);
+  --input: rgba(232, 230, 223, 0.18);
+  --ring: #b8956b;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: "ss01" on, "cv11" on;
+  }
+  ::selection {
+    background: rgba(184, 149, 107, 0.35);
+  }
+}
+
+@layer utilities {
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+  .eyebrow {
+    @apply text-[10px] font-medium uppercase tracking-[0.22em] text-muted-foreground;
+  }
+  .font-display {
+    font-family: var(--font-playfair), Georgia, serif;
+  }
+  .gold-rule {
+    background: linear-gradient(90deg, var(--gold) 0%, rgba(184, 149, 107, 0.25) 100%);
+    height: 1px;
+  }
+  .portal-scroll::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  .portal-scroll::-webkit-scrollbar-thumb {
+    background: rgba(184, 149, 107, 0.45);
+    border-radius: 3px;
+  }
+  .portal-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .watermark-layer {
+    background-image: repeating-linear-gradient(
+      -35deg,
+      transparent 0px,
+      transparent 110px,
+      rgba(27, 67, 50, 0.045) 110px,
+      rgba(27, 67, 50, 0.045) 320px
+    );
+  }
+}
+
+/* Print: receipts, scenario exports, comparisons */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: #ffffff;
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "name": "murivest-sanity-studio",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Murivest Private Capital Portal — Sanity Studio for opportunities, institutional briefs, data-room documents and market intelligence",
+  "scripts": {
+    "dev": "sanity dev",
+    "build": "sanity build",
+    "deploy": "sanity deploy"
+  },
+  "dependencies": {
+    "@sanity/vision": "^3.62.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "sanity": "^3.62.0",
+    "styled-components": "^6.1.13"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.3"
+  }
+}
