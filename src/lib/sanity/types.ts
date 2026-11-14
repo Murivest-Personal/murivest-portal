@@ -128,6 +128,10 @@ export interface LandingContentDoc {
   valueProps?: {heading?: string; detail?: string; _key: string}[] | null
   credibility?: string[] | null
   coverageMarkets?: string[] | null
+  directorName?: string | null
+  directorVideoUrl?: string | null
+  directorVideoPosterRef?: string | null
+  directorVideoCaption?: string | null
 }
 
 /** Tier rank helper — a user of tier N may read documents requiring tier ≤ N. */

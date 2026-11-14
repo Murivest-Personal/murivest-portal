@@ -16,11 +16,11 @@ export default function LandingHeader({isAuthenticated}: {isAuthenticated: boole
           <span className="hidden text-[10px] uppercase tracking-[0.22em] text-ivory/50 sm:block">Private Capital Portal</span>
         </div>
 
-        <nav className="hidden items-center gap-8 text-[11px] font-medium uppercase tracking-[0.18em] text-ivory/70 lg:flex" aria-label="Landing">
+        <nav className="hidden items-center gap-7 text-[11px] font-medium uppercase tracking-[0.18em] text-ivory/70 lg:flex" aria-label="Landing">
+          <a href="#letter" className="transition-colors hover:text-gold">The letter</a>
           <a href="#platform" className="transition-colors hover:text-gold">Platform</a>
           <a href="#access" className="transition-colors hover:text-gold">Access</a>
-          <a href="#coverage" className="transition-colors hover:text-gold">Coverage</a>
-          <a href="#standard" className="transition-colors hover:text-gold">Standard</a>
+          <a href="#faq" className="transition-colors hover:text-gold">Questions</a>
           <a href="#contact" className="transition-colors hover:text-gold">Contact</a>
         </nav>
 

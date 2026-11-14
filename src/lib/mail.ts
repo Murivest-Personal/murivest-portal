@@ -1,17 +1,25 @@
+import nodemailer, {type Transporter} from 'nodemailer'
 import {COMPANY} from '@/lib/constants'
 
 /**
- * Transactional email delivery.
+ * Transactional email delivery — over Murivest's own SMTP server.
  *
- * Production: set RESEND_API_KEY (and MAIL_FROM) — delivery goes through
- * Resend's HTTPS API, so no SMTP dependency is bundled.
- * Self-hosted SMTP is equally supported via the SMTP_* variables with the
- * same sendMail() interface (see README "Email" section).
+ * Configure with the credentials you already own:
+ *   SMTP_HOST   e.g. smtp.murivest.com or your provider's host
+ *   SMTP_PORT   587 (STARTTLS) or 465 (implicit TLS)
+ *   SMTP_SECURE 'true' | 'false' | leave unset to auto-detect from the port
+ *   SMTP_USER   mailbox username
+ *   SMTP_PASS   mailbox password / app password
+ *   MAIL_FROM   visible From header, e.g. "Murivest <no-reply@murivest.com>"
  *
- * Until configured, mail is logged server-side only. When the explicit
- * ALLOW_DEV_AUTH_LINKS flag is set (non-production), auth links are also
- * returned to the caller so the journey remains testable before SMTP is
- * provisioned. The flag must NEVER be enabled in production.
+ * No third-party API (Resend or otherwise) is used. Credentials are only
+ * read from the environment, are never logged, and the transporter is
+ * cached per process.
+ *
+ * Until SMTP is configured, mail is logged server-side only. When the
+ * explicit ALLOW_DEV_AUTH_LINKS flag is set (non-production), auth links
+ * are also returned to the caller so the journey remains testable before
+ * SMTP is provisioned. The flag must NEVER be enabled in production.
  */
 
 export interface MailMessage {
@@ -21,23 +29,54 @@ export interface MailMessage {
   html?: string
 }
 
-const FROM = process.env.MAIL_FROM || `${COMPANY.name} <onboarding@resend.dev>`
+const FROM = process.env.MAIL_FROM || `${COMPANY.name} <office@murivest.com>`
+
+function smtpConfigured(): boolean {
+  return Boolean(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS)
+}
+
+function resolveSecure(): boolean {
+  const raw = process.env.SMTP_SECURE?.trim().toLowerCase()
+  if (raw === 'true') return true
+  if (raw === 'false') return false
+  // Auto: implicit TLS on 465, STARTTLS negotiation on every other port.
+  const port = Number.parseInt(process.env.SMTP_PORT || '587', 10)
+  return port === 465
+}
+
+let cachedTransporter: Transporter | null = null
+
+function getTransporter(): Transporter {
+  if (!cachedTransporter) {
+    cachedTransporter = nodemailer.createTransport({
+      host: process.env.SMTP_HOST,
+      port: Number.parseInt(process.env.SMTP_PORT || '587', 10),
+      secure: resolveSecure(),
+      auth: {user: process.env.SMTP_USER, pass: process.env.SMTP_PASS},
+      // Institutional hygiene: fail fast rather than silently downgrading.
+      requireTLS: resolveSecure() ? undefined : true,
+    })
+  }
+  return cachedTransporter
+}
 
 export async function sendMail(message: MailMessage): Promise<{delivered: boolean; devLink?: string}> {
-  const apiKey = process.env.RESEND_API_KEY
-  if (!apiKey) {
+  if (!smtpConfigured()) {
     console.info(`[mail:not-configured] to=${message.to} subject="${message.subject}"\n${message.text}`)
     return {delivered: false, devLink: devLinkFrom(message.text)}
   }
   try {
-    const res = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: {Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json'},
-      body: JSON.stringify({from: FROM, to: [message.to], subject: message.subject, text: message.text, html: message.html}),
+    const transporter = getTransporter()
+    await transporter.sendMail({
+      from: FROM,
+      to: message.to,
+      subject: message.subject,
+      text: message.text,
+      html: message.html,
     })
-    return {delivered: res.ok}
+    return {delivered: true}
   } catch (err) {
-    console.error('[mail:error]', err)
+    console.error('[mail:error]', err instanceof Error ? err.message : err)
     return {delivered: false}
   }
 }

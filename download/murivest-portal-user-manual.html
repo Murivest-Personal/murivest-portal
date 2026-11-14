@@ -1,0 +1,909 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>The Murivest Investor Manual</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;900&family=Playfair+Display:ital,wght@0,400;0,700;0,900;1,400&display=swap" rel="stylesheet">
+<style>
+@page {
+  size: 720px 1020px;
+  margin: 0;
+}
+:root {
+  --c-bg: #FAF9F6;          /* ivory page background */
+  --c-text: #1C2B23;        /* ink */
+  --c-primary: #1B4332;     /* deep forest green */
+  --c-primary-deep: #0E2A1C; /* darkest forest (cover/ending) */
+  --c-header: #2A463B;      /* low-saturation table header fill */
+  --c-gold: #B8956B;        /* muted gold accent (XS tier) */
+  --c-gold-deep: #96744F;
+  --c-muted: #6D7A6F;       /* secondary text */
+  --c-border: #E3DED2;      /* hairlines */
+  --c-wash: #F0EDE6;        /* parchment wash */
+}
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 720px;
+  background: var(--c-bg);
+  color: var(--c-text);
+  font-family: 'Inter', 'Noto Sans SC', sans-serif;
+  font-size: 13.5px;
+  line-height: 1.62;
+  line-break: strict;
+  word-break: normal;
+  overflow-wrap: break-word;
+}
+@media screen {
+  html {
+    height: auto;
+    display: flex;
+    justify-content: center;
+    background: #26251f;
+  }
+  body {
+    margin: 20px auto;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.35);
+  }
+}
+p { margin: 0 0 10px 0; text-align: left; }
+strong { color: var(--c-primary); font-weight: 600; }
+em { font-style: italic; }
+
+/* ============ COVER ============ */
+.cover {
+  position: relative;
+  width: 720px;
+  height: 1020px;
+  box-sizing: border-box;
+  break-after: page;
+  overflow: hidden;
+  background: var(--c-primary-deep);
+  color: var(--c-bg);
+}
+.cover-bg {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: radial-gradient(circle 460px at 101% 102%, rgba(255,255,255,0.05) 99.5%, rgba(255,255,255,0) 100%);
+}
+.cover-structure {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+}
+.cover-structure .anchor-line {
+  position: absolute;
+  left: 64px;
+  top: 120px;
+  bottom: 140px;
+  width: 4px;
+  background: linear-gradient(180deg, var(--c-gold) 0%, rgba(184,149,107,0.25) 100%);
+}
+.cover-content {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 0 70px 0 144px;
+}
+.cover-kicker {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 5px;
+  text-transform: uppercase;
+  color: var(--c-gold);
+  margin-bottom: 26px;
+}
+.cover-title {
+  font-family: 'Playfair Display', 'Noto Serif SC', serif;
+  font-weight: 900;
+  font-size: 64px;
+  line-height: 1.06;
+  color: var(--c-bg);
+  margin: 0 0 30px 0;
+  max-width: 460px;
+}
+.cover-summary {
+  font-size: 14.5px;
+  line-height: 1.7;
+  color: rgba(250,249,246,0.72);
+  max-width: 430px;
+}
+.cover-meta {
+  margin-top: 44px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  font-size: 11px;
+  letter-spacing: 2.5px;
+  text-transform: uppercase;
+  color: rgba(250,249,246,0.55);
+}
+.cover-meta .strong { color: var(--c-gold); }
+.cover-edition {
+  position: absolute;
+  z-index: 3;
+  left: 144px;
+  bottom: 56px;
+  font-size: 10px;
+  letter-spacing: 2.5px;
+  text-transform: uppercase;
+  color: rgba(250,249,246,0.45);
+}
+
+/* ============ MAIN CONTENT (flows) ============ */
+.main-content {
+  padding: 58px 65px 42px 65px;
+  /* no fixed height, no overflow control — content flows */
+}
+.chapter-header {
+  break-after: avoid;
+  break-inside: avoid;
+  margin-top: 26px;
+  margin-bottom: 14px;
+}
+.chapter-header:first-child { margin-top: 0; }
+.chapter-tag {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 3.5px;
+  text-transform: uppercase;
+  color: var(--c-gold);
+  margin-bottom: 6px;
+}
+.chapter-title {
+  font-family: 'Playfair Display', 'Noto Serif SC', serif;
+  font-weight: 700;
+  font-size: 25px;
+  line-height: 1.2;
+  color: var(--c-primary);
+  margin: 0 0 8px 0;
+}
+.chapter-divider {
+  height: 1px;
+  width: 64px;
+  background: linear-gradient(90deg, var(--c-gold) 0%, rgba(184,149,107,0.2) 100%);
+  margin: 44px 0 46px 0;
+}
+.sub-title {
+  font-family: 'Playfair Display', 'Noto Serif SC', serif;
+  font-weight: 700;
+  font-size: 16px;
+  color: var(--c-primary);
+  margin: 18px 0 8px 0;
+  break-after: avoid;
+}
+.lead-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 2.5px;
+  text-transform: uppercase;
+  color: var(--c-gold-deep);
+}
+.lead { margin-bottom: 8px; }
+
+/* Step list */
+.steps {
+  list-style: none;
+  counter-reset: step;
+  margin: 12px 0 6px 0;
+  padding: 0;
+}
+.steps li {
+  counter-increment: step;
+  position: relative;
+  padding: 0 0 12px 44px;
+  break-inside: avoid;
+  text-align: left;
+}
+.steps li::before {
+  content: counter(step, decimal-leading-zero);
+  position: absolute;
+  left: 0;
+  top: 1px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 20px;
+  font-family: 'Inter', sans-serif;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: var(--c-primary-deep);
+  background: var(--c-gold);
+}
+.steps li strong { color: var(--c-primary); }
+
+/* Tip / note boxes */
+.tip, .note {
+  break-inside: avoid;
+  margin: 14px 0;
+  padding: 12px 16px;
+  background: var(--c-wash);
+  border-left: 3px solid var(--c-gold);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+.tip .tip-label, .note .note-label {
+  display: block;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 2.5px;
+  text-transform: uppercase;
+  color: var(--c-gold-deep);
+  margin-bottom: 4px;
+}
+.note { background: #F4F1EA; border-left-color: var(--c-primary); }
+
+/* Cards */
+.card {
+  break-inside: avoid;
+  margin-bottom: 12px;
+  padding: 14px 18px;
+  background: #FFFFFF;
+  border: 1px solid var(--c-border);
+  border-top: 2px solid rgba(184,149,107,0.55);
+  text-align: left;
+}
+.card .card-title {
+  font-family: 'Playfair Display', 'Noto Serif SC', serif;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--c-primary);
+  margin-bottom: 5px;
+}
+.card p:last-child { margin-bottom: 0; }
+
+/* Tables */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 12px 0;
+  font-size: 12px;
+  background: #FFFFFF;
+}
+thead { display: table-header-group; }
+tr { break-inside: avoid; }
+th {
+  background: var(--c-header);
+  color: #FAF9F6;
+  text-align: left;
+  font-weight: 600;
+  padding: 8px 10px;
+  letter-spacing: 0.4px;
+}
+td {
+  border: 1px solid var(--c-border);
+  padding: 8px 10px;
+  vertical-align: top;
+  text-align: left;
+}
+tbody tr:nth-child(odd) td { background: #F7F4EF; }
+td .t-strong { font-weight: 600; color: var(--c-primary); }
+
+/* Status chips (orders lifecycle) */
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  max-width: 100%;
+  margin: 12px 0;
+  break-inside: avoid;
+}
+.chip {
+  flex: 0 1 auto;
+  min-width: 60px;
+  max-width: 100%;
+  padding: 6px 12px;
+  border: 1px solid var(--c-gold);
+  background: rgba(184,149,107,0.08);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--c-gold-deep);
+  overflow-wrap: break-word;
+}
+.chip + .chip::before { content: none; }
+.chip-arrow {
+  align-self: center;
+  color: var(--c-muted);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+/* Module badge inline */
+.module {
+  display: inline-block;
+  padding: 2px 8px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.8px;
+  text-transform: uppercase;
+  color: var(--c-gold-deep);
+  background: rgba(184,149,107,0.12);
+  border: 1px solid rgba(184,149,107,0.35);
+}
+
+/* Ending page */
+.ending {
+  width: 720px;
+  height: 1020px;
+  box-sizing: border-box;
+  break-before: page;
+  overflow: hidden;
+  background: var(--c-primary-deep);
+  color: var(--c-bg);
+  position: relative;
+}
+.ending .ending-inner {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  padding: 0 90px;
+}
+.ending .ending-kicker {
+  font-size: 11px;
+  letter-spacing: 4px;
+  text-transform: uppercase;
+  color: var(--c-gold);
+  margin-bottom: 24px;
+}
+.ending .ending-title {
+  font-family: 'Playfair Display', 'Noto Serif SC', serif;
+  font-weight: 900;
+  font-size: 42px;
+  line-height: 1.15;
+  margin: 0 0 26px 0;
+  color: var(--c-bg);
+}
+.ending .ending-text {
+  font-size: 13.5px;
+  line-height: 1.7;
+  color: rgba(250,249,246,0.75);
+  max-width: 430px;
+}
+.ending .ending-rule {
+  width: 72px;
+  height: 1px;
+  background: var(--c-gold);
+  margin: 48px 0;
+}
+.ending .ending-contact {
+  font-size: 11.5px;
+  letter-spacing: 1.5px;
+  line-height: 2;
+  color: rgba(250,249,246,0.6);
+  text-transform: uppercase;
+}
+.ending .ending-foot {
+  position: absolute;
+  bottom: 54px;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font-size: 10px;
+  letter-spacing: 2.5px;
+  text-transform: uppercase;
+  color: rgba(250,249,246,0.4);
+}
+</style>
+</head>
+<body>
+
+<!-- ==================== COVER ==================== -->
+<div class="cover">
+  <div class="cover-bg"></div>
+  <div class="cover-structure">
+    <div class="anchor-line"></div>
+  </div>
+  <div class="cover-content">
+    <div class="cover-kicker">Murivest Private Capital Portal</div>
+    <h1 class="cover-title">The Investor Manual</h1>
+    <div class="cover-summary">
+      A step-by-step guide to the private capital workspace of Murivest Group Ltd — how to gain verified
+      access, discover off-market Grade A opportunities, underwrite them, model capital structure, order
+      institutional briefs, and manage mandates, documents and portfolio positions in one secure
+      environment. Written for principals who read the underwriting before they write the cheque.
+    </div>
+    <div class="cover-meta">
+      <div><span class="strong">Edition 1.0</span> · Portal release 1.0</div>
+      <div>UHNWIs · Family offices · Institutional investors</div>
+      <div>Nairobi · London · East Africa &amp; United Kingdom coverage</div>
+    </div>
+  </div>
+  <div class="cover-edition">Murivest Group Ltd · Strictly confidential · Not investment advice</div>
+</div>
+
+<!-- ==================== MAIN CONTENT ==================== -->
+<div class="main-content">
+
+  <!-- ============ WELCOME ============ -->
+  <div class="chapter-header">
+    <div class="chapter-tag">Welcome</div>
+    <h2 class="chapter-title">How to use this manual</h2>
+    <div class="chapter-divider"></div>
+  </div>
+  <p>
+    This manual walks through every module of the Murivest Private Capital Portal in the order a new
+    investor meets them: from requesting access, through verification, into discovery, underwriting,
+    modelling, ordering and mandate management. Each chapter follows the same pattern — <strong>what the
+    module does</strong>, <strong>how it helps you</strong>, and <strong>numbered steps</strong> for the
+    interactions you will actually perform. Nothing here requires prior familiarity with the platform.
+  </p>
+  <p>
+    Three conventions govern everything you will see inside the portal, and they are worth fixing now.
+    First, <strong>the portal invents nothing</strong>: financial figures appear only when Murivest's
+    editorial team has published them, and empty fields render as "not disclosed" rather than estimates.
+    Second, <strong>every model output is labelled illustrative</strong> — the Investment Studio computes
+    from your assumptions, and actuals in the Portfolio module are always visually separated from
+    projections. Third, <strong>access is graduated</strong>: confidential material unlocks through
+    verification tiers, never on registration alone.
+  </p>
+  <div class="note">
+    <span class="note-label">Scope note</span>
+    Murivest Group Ltd connects institutional firms, institutional investors and sophisticated retail
+    investors to Grade A income-producing commercial assets on a <strong>direct, non-pooled, mandate-only
+    basis</strong> under fiduciary standards and applicable KYC/AML requirements. Murivest does not pool
+    capital or operate collective investment schemes. This manual describes software workflow, not an
+    offer of financial products.
+  </div>
+
+  <!-- ============ CHAPTER 1 ============ -->
+  <div class="chapter-header">
+    <div class="chapter-tag">Chapter 1</div>
+    <h2 class="chapter-title">Getting in: the landing page, your account, and verification</h2>
+    <div class="chapter-divider"></div>
+  </div>
+  <p><span class="lead-label">What it does —</span> the public landing page introduces the firm, carries the
+  Director's letter and introduction video, and doubles as the gateway to the authenticated workspace.
+  Behind it sits the full account and verification pipeline.</p>
+  <p><span class="lead-label">How it helps —</span> you can evaluate the firm's standards — including its
+  refusals — before sharing any information, then progress through verification at your own pace with
+  visible status at every stage.</p>
+  <p>The landing page is a long-form letter rather than a brochure. It contains: the Director's letter, the
+  Director's introduction video (with its downloadable word-for-word script), the six questions the portal
+  answers, a plain statement of what Murivest is <em>not</em>, the graduated-access explanation, coverage
+  facts, and an objection-handling section. Two downloads are available without any form: this manual and
+  the Director's video script.</p>
+  <ol class="steps">
+    <li><strong>Open the portal's address</strong> and read the landing page. Watch the Director's
+    introduction video before anything else — it is the fastest calibration of who you are dealing with.</li>
+    <li><strong>Select "Request private access".</strong> The sign-in window opens over the page itself;
+    no separate marketing site, no third-party account.</li>
+    <li><strong>Create your account</strong> with an email address and a strong password, or request a
+    magic sign-in link sent to your inbox. Both paths lead to the same account.</li>
+    <li><strong>Verify your email</strong> by opening the link sent to your inbox — the link is
+    single-use and expires. If it does not arrive within a few minutes, check spam, then use the resend
+    option.</li>
+    <li><strong>Sign in</strong> with your credentials. The workspace opens on the onboarding wizard
+    until verification is complete.</li>
+  </ol>
+  <div class="sub-title">The onboarding wizard</div>
+  <p>Onboarding collects what fiduciary standards and KYC/AML requirements demand, in five short stages:
+  investor classification (private individual, institutional representative, or organisation
+  administrator), personal or organisational details, objectives and capacity, communication preferences,
+  and document submission. Each stage saves independently — you can pause and resume. A confidentiality
+  agreement is accepted before any confidential material becomes visible, and internal review then runs
+  its course.</p>
+  <table>
+    <thead>
+      <tr><th style="width:18%">Tier</th><th style="width:41%">Unlocks</th><th style="width:41%">Typically follows</th></tr>
+    </thead>
+    <tbody>
+      <tr><td class="t-strong">Tier 1</td><td>Account, opportunity listings and summaries, criteria and Studio modelling on your own inputs</td><td>Account creation and email verification</td></tr>
+      <tr><td class="t-strong">Tier 2</td><td>Opportunity financials, lease profiles, investment rationale and key risks</td><td>Classification, capacity and KYC/AML review</td></tr>
+      <tr><td class="t-strong">Tier 3</td><td>Off-market briefs, the full data room and document grants</td><td>NDA acceptance and internal review</td></tr>
+    </tbody>
+  </table>
+  <div class="tip">
+    <span class="tip-label">Why the friction</span>
+    The verification pipeline is not a conversion tactic — it protects both sides of off-market
+    transactions. Your current tier and pending requirements are always visible on the workspace
+    overview, so you always know exactly what remains.
+  </div>
+
+  <!-- ============ CHAPTER 2 ============ -->
+  <div class="chapter-header">
+    <div class="chapter-tag">Chapter 2</div>
+    <h2 class="chapter-title">The command centre: your workspace overview</h2>
+    <div class="chapter-divider"></div>
+  </div>
+  <p><span class="lead-label">What it does —</span> the overview is the first page after sign-in: a single
+  view of your verification pipeline, access tier, investment criteria state, recommended opportunities,
+  active orders and mandates, outstanding actions and saved work.</p>
+  <p><span class="lead-label">How it helps —</span> it answers "what should I do next?" in one glance.
+  Instead of hunting across modules, the actions that require you surface here — an unsigned NDA, a
+  pending payment, an advisor reply, a capital call due.</p>
+  <ol class="steps">
+    <li><strong>Check the verification panel</strong> first. If any stage is outstanding, complete it —
+    tiers gate everything else.</li>
+    <li><strong>Review recommended opportunities.</strong> These match your stated criteria in the
+    Investment Studio; if the list is empty, that means either verification is in progress or nothing
+    currently matches — never filler listings.</li>
+    <li><strong>Clear outstanding actions</strong> — each links directly to the module where the action
+    lives.</li>
+    <li><strong>Scan active orders and mandates</strong> for status changes since your last visit, then
+    enter the relevant module for detail.</li>
+  </ol>
+
+  <!-- ============ CHAPTER 3 ============ -->
+  <div class="chapter-header">
+    <div class="chapter-tag">Chapter 3</div>
+    <h2 class="chapter-title">Discover: the opportunity intelligence feed</h2>
+    <div class="chapter-divider"></div>
+  </div>
+  <p><span class="lead-label">What it does —</span> Discover lists every opportunity the editorial team
+  has published from the firm's content system — marketed, off-market and auction-sourced Grade A assets —
+  filtered to your verification tier, with filters for geography, asset class, deal structure, status and
+  investment size.</p>
+  <p><span class="lead-label">How it helps —</span> this is not a public listing feed. Opportunities
+  surface because they match your criteria, and each listing transparently shows which of your criteria it
+  satisfies and where it diverges. Off-market and auction-originated assets appear here because they are
+  tier-gated — assets that would otherwise never reach the open market.</p>
+  <ol class="steps">
+    <li><strong>Open Discover</strong> and set filters — geography, asset class, structure, status
+    (off-market, marketed, auction, under offer), and budget range.</li>
+    <li><strong>Save the filter set</strong> as a saved search; reload it on every visit instead of
+    rebuilding it.</li>
+    <li><strong>Open an opportunity's detail page.</strong> The summary, status and indicative parameters
+    are visible from Tier 1; financials, lease profile, investment rationale and key risks unlock at
+    Tier 2.</li>
+    <li><strong>Read the key risks block</strong> before the financials. The risk section is written by
+    the desk, not the vendor.</li>
+    <li><strong>Act from the same page:</strong> save the asset to your workspace, add it to a
+    comparison, send the desk an enquiry, order a linked brief, or push it straight into the Investment
+    Studio for modelling.</li>
+  </ol>
+  <div class="tip">
+    <span class="tip-label">Most-viewed segment</span>
+    The feed highlights assets with the highest verified-investor view counts. Interest of your peers is
+    information — treat it as a signal to look sooner, not as a recommendation.
+  </div>
+
+  <!-- ============ CHAPTER 4 ============ -->
+  <div class="chapter-header">
+    <div class="chapter-tag">Chapter 4</div>
+    <h2 class="chapter-title">The Investment Studio: modelling before money</h2>
+    <div class="chapter-divider"></div>
+  </div>
+  <p><span class="lead-label">What it does —</span> the Studio is the portal's decision engine: a
+  criteria workspace, a full returns model, illustrative financing scenarios, sensitivity grids, capital-gap
+  analysis and an exit-strategy workspace — with every scenario saved to your account.</p>
+  <p><span class="lead-label">How it helps —</span> it converts "the deal looks interesting" into numbers
+  you can defend: net operating income, gross and net yield, cash-on-cash, payback period, internal rate
+  of return, equity multiple and debt-service coverage — under <em>your</em> assumptions, stress-tested
+  by <em>your</em> pessimism. And it never dismisses an opportunity merely because your stated equity is
+  below the asking price.</p>
+  <div class="sub-title">Setting your criteria</div>
+  <p>Open the criteria panel and state what you actually deploy: capital available and total capacity with
+  currency, geographies, asset classes, acceptable deal structures, minimum gross and net yield, target
+  IRR and cash-on-cash, payback tolerance, hold-period range, leverage comfort, risk tolerance and exit
+  preferences. These criteria drive Discover's matching and the overview's recommendations — precision
+  here pays everywhere else.</p>
+  <div class="sub-title">A modelling pass, step by step</div>
+  <ol class="steps">
+    <li><strong>Open an opportunity from Discover</strong> and choose to model it. The Studio loads the
+    asset's published parameters where available; you supply or adjust the rest.</li>
+    <li><strong>Enter your acquisition assumptions</strong> — price, transaction costs, and your equity.
+    If your equity is short of the asking price, the capital-gap engine maps financing pathways across
+    loan-to-value points instead of rejecting the deal.</li>
+    <li><strong>Set the financing scenario</strong> — loan-to-value, rate, amortisation term and any
+    interest-only period. The model annuitises debt after the interest-only window and computes coverage.</li>
+    <li><strong>Read the results panel:</strong> NOI, yields, cash-on-cash, payback, IRR and equity
+    multiple, each labelled illustrative, each traceable to the inputs above it.</li>
+    <li><strong>Stress it.</strong> Open the sensitivity grid and move the interest rate and exit capitalisation
+    rate against your base case; watch which assumption breaks the return first.</li>
+    <li><strong>Choose an exit strategy</strong> — hold for income, timed sale, value-add or refinance —
+    and compare net proceeds across them.</li>
+    <li><strong>Save the scenario.</strong> Name it; it joins your scenario library for comparison and
+    export. Nothing is lost between sessions.</li>
+  </ol>
+  <div class="note">
+    <span class="note-label">Illustrative, always</span>
+    Studio outputs are computed from your assumptions with a transparent, documented formula set. They
+    are preparation for diligence, not a substitute for it — actual figures of assets you own live in
+    the Portfolio module and are always visually separated from these projections.
+  </div>
+
+  <!-- ============ CHAPTER 5 ============ -->
+  <div class="chapter-header">
+    <div class="chapter-tag">Chapter 5</div>
+    <h2 class="chapter-title">Compare: side-by-side decision-making</h2>
+    <div class="chapter-divider"></div>
+  </div>
+  <p><span class="lead-label">What it does —</span> Compare places opportunities and saved scenarios
+  beside one another, with metrics aligned line by line, and stores named comparisons for later.</p>
+  <p><span class="lead-label">How it helps —</span> most real decisions are between two or three
+  candidates. Aligned metrics turn days of tab-switching into one screen, and a saved comparison becomes
+  the document you circulate to your committee or family office colleagues.</p>
+  <ol class="steps">
+    <li><strong>Open Compare</strong> and create a new comparison.</li>
+    <li><strong>Select participants</strong> — opportunities from Discover and/or scenarios from your
+    Studio library, in any combination.</li>
+    <li><strong>Read the aligned view</strong> — headline parameters and modelled metrics row by row,
+    divergences obvious at a glance.</li>
+    <li><strong>Save the comparison</strong> under a working name; reopen or export it whenever the
+    committee reconvenes.</li>
+  </ol>
+
+  <!-- ============ CHAPTER 6 ============ -->
+  <div class="chapter-header">
+    <div class="chapter-tag">Chapter 6</div>
+    <h2 class="chapter-title">Orders: briefs on the desk, paid and tracked</h2>
+    <div class="chapter-divider"></div>
+  </div>
+  <p><span class="lead-label">What it does —</span> the Orders module is the catalogue of private and
+  institutional briefs — underwriting packs for specific opportunities, off-market properties,
+  auction-linked properties, and custom scoping requests — with explicit scope, delivery expectations and
+  per-format pricing displayed before payment.</p>
+  <p><span class="lead-label">How it helps —</span> instead of trading calls and emails to learn what a
+  deep institutional brief costs and contains, you order it in minutes, pay by the rail you prefer, and
+  watch its status move to delivery — with the completed document landing in your secure Documents area.</p>
+  <div class="chip-row">
+    <span class="chip">Pending</span><span class="chip-arrow">&#8594;</span>
+    <span class="chip">In progress</span><span class="chip-arrow">&#8594;</span>
+    <span class="chip">Ready</span><span class="chip-arrow">&#8594;</span>
+    <span class="chip">Delivered</span>
+  </div>
+  <ol class="steps">
+    <li><strong>Open Orders</strong> and browse the catalogue. Each brief card states its scope, what
+    the analysis covers, expected delivery, and pricing per format — digital, or hard copy where the
+    desk offers it.</li>
+    <li><strong>Open a brief</strong> linked to an opportunity you are tracking, or request a custom
+    underwriting package and describe the scope you want — the desk quotes it before work begins.</li>
+    <li><strong>Place the order</strong> with your delivery details and contact reference.</li>
+    <li><strong>Pay by your preferred rail:</strong> M-Pesa to the published paybill, bank wire with
+    your reference for the finance desk to verify, or card where the gateway is enabled. Every order is
+    receipted and audit-logged.</li>
+    <li><strong>Track the lifecycle</strong> — Pending, In Progress, Ready, Delivered — with a
+    notification at each transition.</li>
+    <li><strong>Collect the deliverable</strong> in Documents, re-order a refresh from the order
+    history, or raise a follow-up custom scope request against the same asset.</li>
+  </ol>
+
+  <!-- ============ CHAPTER 7 ============ -->
+  <div class="chapter-header">
+    <div class="chapter-tag">Chapter 7</div>
+    <h2 class="chapter-title">My Investments: the portfolio of record</h2>
+    <div class="chapter-divider"></div>
+  </div>
+  <p><span class="lead-label">What it does —</span> My Investments holds your actual positions: acquisition
+  and financing terms, income actuals, occupancy, valuations with their basis and dates, capital calls,
+  and exit planning links back into the Studio.</p>
+  <p><span class="lead-label">How it helps —</span> this is where the truth lives. Actuals here are never
+  confused with projections there; capital calls are scheduled and tracked to payment; and each position's
+  exit planning starts from its real numbers, not from a model's memory of them.</p>
+  <ol class="steps">
+    <li><strong>Add a position</strong> — asset name, class, geography, acquisition date, purchase price
+    and currency, equity deployed, debt amount, rate and maturity, income actuals, operating expenses,
+    occupancy, and the latest valuation with its stated basis.</li>
+    <li><strong>Schedule capital calls</strong> against a position — label, amount, currency and due
+    date — and mark them called and paid as they progress.</li>
+    <li><strong>Update income and occupancy actuals</strong> as reporting arrives, so the position
+    reflects today, not underwriting day.</li>
+    <li><strong>Open exit planning</strong> from a position to model its sale or refinance in the Studio
+    with live parameters.</li>
+  </ol>
+
+  <!-- ============ CHAPTER 8 ============ -->
+  <div class="chapter-header">
+    <div class="chapter-tag">Chapter 8</div>
+    <h2 class="chapter-title">Mandates: engaging the firm properly</h2>
+    <div class="chapter-divider"></div>
+  </div>
+  <p><span class="lead-label">What it does —</span> Mandates formalises what "mandate-only" means in
+  practice: you define an acquisition mandate — target allocation range, currency, geographies, asset
+  classes, structures, minimum net yield, target IRR, hold period, leverage comfort, risk mandate and
+  exclusions — submit it for desk review, and track it from activation through milestones to closure.</p>
+  <p><span class="lead-label">How it helps —</span> a documented mandate is what turns searching into
+  sourcing. With your mandate active, Discover tags matching opportunities to it, milestones from the desk
+  appear as they are reached, and scope, exclusions and fees live in writing rather than memory.</p>
+  <ol class="steps">
+    <li><strong>Create the mandate</strong> and complete its parameters — the same dimensions as your
+    Studio criteria, formalised for execution.</li>
+    <li><strong>Submit for desk review.</strong> Your advisor confirms scope, exclusions and the fee
+    basis in writing before activation.</li>
+    <li><strong>Track milestones</strong> as the desk delivers against the mandate — each lands in your
+    activity timeline with notifications.</li>
+    <li><strong>Pause or close</strong> the mandate when circumstances change; a closed mandate keeps its
+    history.</li>
+  </ol>
+
+  <!-- ============ CHAPTER 9 ============ -->
+  <div class="chapter-header">
+    <div class="chapter-tag">Chapter 9</div>
+    <h2 class="chapter-title">Documents: the secure data room</h2>
+    <div class="chapter-divider"></div>
+  </div>
+  <p><span class="lead-label">What it does —</span> Documents is the controlled repository: diligence
+  packs, investment memoranda, financial models, legal files and your delivered briefs — each gated by
+  verification tier plus explicit grants, watermarked on delivery, and served through logged,
+  non-guessable access.</p>
+  <p><span class="lead-label">How it helps —</span> everything confidential arrives in one place with a
+  record of who touched it and when. Preview-only files cannot be downloaded; downloadable ones are
+  stamped to your account; and the desk can grant or revoke access precisely.</p>
+  <ol class="steps">
+    <li><strong>Open Documents</strong> — the list shows only files your tier and grants permit, plus
+    your delivered briefs from Orders.</li>
+    <li><strong>Preview a file</strong> to read it in the portal — the file streams through the
+    authenticated service; its storage location never reaches your browser.</li>
+    <li><strong>Download where permitted</strong> — the copy is watermarked to your account and the
+    download is logged.</li>
+    <li><strong>Request access</strong> to a file you can see listed but not open — state the subject
+    and your reason; the request enters the desk's workflow and you are notified on decision.</li>
+    <li><strong>Review your own access history</strong> under security — every view and download you
+    have made is there too.</li>
+  </ol>
+
+  <!-- ============ CHAPTER 10 ============ -->
+  <div class="chapter-header">
+    <div class="chapter-tag">Chapter 10</div>
+    <h2 class="chapter-title">Market Intelligence: the research shelf</h2>
+    <div class="chapter-divider"></div>
+  </div>
+  <p><span class="lead-label">What it does —</span> Market Intelligence curates the desk's published
+  research and commentary — market reports, country and sector insights, trend notes, economic indicators
+  and commentary — each gated to an access tier, with attached documents delivered through the same data
+  room controls.</p>
+  <p><span class="lead-label">How it helps —</span> underwriting is local. Before committing capital to a
+  geography or sector, the shelf is where its rent levels, supply lines and policy shifts are already
+  written down by the people sourcing there.</p>
+  <ol class="steps">
+    <li><strong>Open Market Intelligence</strong> and browse by category or geography.</li>
+    <li><strong>Read a report's summary</strong> in the list, then open the full piece.</li>
+    <li><strong>Open attached documents</strong> through the same permission and logging rules as the
+    data room.</li>
+  </ol>
+
+  <!-- ============ CHAPTER 11 ============ -->
+  <div class="chapter-header">
+    <div class="chapter-tag">Chapter 11</div>
+    <h2 class="chapter-title">Activity &amp; Communications: one conversation, fully tracked</h2>
+    <div class="chapter-divider"></div>
+  </div>
+  <p><span class="lead-label">What it does —</span> this module holds your advisor threads, your
+  opportunity-linked enquiries, the unified activity timeline of every event in your workspace, and the
+  notification bell that signals what changed.</p>
+  <p><span class="lead-label">How it helps —</span> institutional relationships fail on fragmentation —
+  the advice in one inbox, the documents in another, the decisions nowhere. Here the message about an
+  opportunity sits beside the order, the document and the mandate it concerns, and the timeline gives you
+  an audit-grade memory of the whole engagement.</p>
+  <ol class="steps">
+    <li><strong>Open a thread with your advisor</strong> and write as you would email — the thread is
+    persistent, searchable within the module, and private to you and the desk.</li>
+    <li><strong>Raise an enquiry from any opportunity</strong> — the enquiry carries its asset context
+    automatically, so the desk answers about the right thing.</li>
+    <li><strong>Work the timeline</strong> — every save, order, status change, document access and
+    milestone appears in order, each item linking to its module.</li>
+    <li><strong>Clear the notification bell</strong> on each visit; unread counts persist between
+    sessions.</li>
+  </ol>
+
+  <!-- ============ CHAPTER 12 ============ -->
+  <div class="chapter-header">
+    <div class="chapter-tag">Chapter 12</div>
+    <h2 class="chapter-title">Profile, preferences, account &amp; security</h2>
+    <div class="chapter-divider"></div>
+  </div>
+  <p><span class="lead-label">What it does —</span> these final settings govern your identity in the
+  portal, how it speaks to you, and how it defends itself: profile and capacity details, communication
+  preferences, password policy, multi-factor authentication, device-recognised sessions with individual
+  revocation, and your full security history.</p>
+  <p><span class="lead-label">How it helps —</span> a workspace holding eight-to-nine-figure intentions
+  must be defensible. Every capability here — MFA, per-device session control, access logs — exists so
+  that the quietest room is also the safest one.</p>
+  <div class="sub-title">Hardening your account</div>
+  <ol class="steps">
+    <li><strong>Set communication preferences</strong> — what you want to be notified about, and how
+    loudly.</li>
+    <li><strong>Enable multi-factor authentication</strong> under security: the portal displays a QR
+    code for your authenticator app; scan it, then confirm with a generated code to activate. Your
+    one-time-passcode secret is encrypted at rest.</li>
+    <li><strong>Review active sessions</strong> — each is device-recognised, with location and last-seen
+    time. Revoke any session you do not recognise, in one click.</li>
+    <li><strong>Change your password</strong> periodically through the enforced policy, and review the
+    security history for sign-ins and security-relevant events.</li>
+    <li><strong>Sign out cleanly</strong> on shared machines — the session ends at the server, not just
+    the browser.</li>
+  </ol>
+  <div class="tip">
+    <span class="tip-label">If you lose your authenticator</span>
+    Contact the desk at <strong>+254 115 277 610</strong> or <strong>office@murivest.com</strong> —
+    recovery runs through identity verification with the team, never through an emailed reset link
+    alone.
+  </div>
+
+  <!-- ============ CHAPTER 13 ============ -->
+  <div class="chapter-header">
+    <div class="chapter-tag">Chapter 13</div>
+    <h2 class="chapter-title">The value ledger: what the portal does for you</h2>
+    <div class="chapter-divider"></div>
+  </div>
+  <p>Every module exists to answer a question a serious principal asks. This table is the whole manual in
+  one view — keep it to hand.</p>
+  <table>
+    <thead>
+      <tr><th style="width:34%">You want to…</th><th style="width:38%">The portal…</th><th style="width:28%">Where</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>See exclusive, better-structured deals</td><td>Surfaces tier-gated, criteria-matched opportunities — off-market and auction-sourced included</td><td class="t-strong">Discover</td></tr>
+      <tr><td>Interrogate the underwriting before committing</td><td>Publishes NOI, yields, lease profiles, stress cases and key risks; deep briefs on order</td><td class="t-strong">Discover · Orders</td></tr>
+      <tr><td>Model leverage, hold and exits yourself</td><td>Full modelling with financing scenarios, sensitivity grids and exit strategy, saved per scenario</td><td class="t-strong">Investment Studio</td></tr>
+      <tr><td>Bridge an equity shortfall</td><td>Capital-gap analysis maps financing pathways — never dismisses the deal</td><td class="t-strong">Investment Studio</td></tr>
+      <tr><td>Order and pay for institutional briefs</td><td>Explicit scope and pricing, M-Pesa / wire / card, tracked to delivery with receipts</td><td class="t-strong">Orders</td></tr>
+      <tr><td>Decide between candidates</td><td>Aligned side-by-side comparison of opportunities and scenarios, saved for the committee</td><td class="t-strong">Compare</td></tr>
+      <tr><td>Track what you own — truthfully</td><td>Actual positions, capital calls, valuations; actuals never mixed with projections</td><td class="t-strong">My Investments</td></tr>
+      <tr><td>Engage the firm on the record</td><td>Documented mandates with milestones, matching and written scope</td><td class="t-strong">Mandates</td></tr>
+      <tr><td>Keep documents confidential</td><td>Tier-plus-grant access, watermarking, logging, non-guessable delivery</td><td class="t-strong">Documents</td></tr>
+      <tr><td>Hold one conversation with the desk</td><td>Advisor threads, contextual enquiries, unified timeline, notifications</td><td class="t-strong">Activity &amp; Comms</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ============ TROUBLESHOOTING ============ -->
+  <div class="chapter-header">
+    <div class="chapter-tag">Help</div>
+    <h2 class="chapter-title">Troubleshooting and the desk</h2>
+    <div class="chapter-divider"></div>
+  </div>
+  <div class="card">
+    <div class="card-title">No verification email arrived</div>
+    <p>Check spam and confirm the address you registered; then use the resend option on the verification
+    screen. Links are single-use and expire — a fresh request is always safe.</p>
+  </div>
+  <div class="card">
+    <div class="card-title">Financials or documents are not visible</div>
+    <p>This is tier behaviour, not an error: financial fields, lease profiles and risks require Tier 2;
+    the data room and off-market briefs require Tier 3 and explicit grants. Check your current tier and
+    outstanding steps on the overview; request access through the documented request workflow.</p>
+  </div>
+  <div class="card">
+    <div class="card-title">Sign-in is refused</div>
+    <p>Repeated failures lock the account temporarily as a protection. Wait, then retry — or contact the
+    desk to unlock after identity verification.</p>
+  </div>
+  <div class="card">
+    <div class="card-title">A payment or receipt question</div>
+    <p>Every order carries its payment record and receipt in Orders; wire references are verified by the
+    finance desk before status advances. Raise a follow-up enquiry on the order itself, or call the desk.</p>
+  </div>
+  <div class="card">
+    <div class="card-title">Contacting the desk</div>
+    <p>By message, from Activity &amp; Communications — it reaches your assigned advisor with your
+    context attached. By phone or email: <strong>+254 115 277 610</strong> ·
+    <strong>office@murivest.com</strong> · 4th Avenue Parklands, Diamond Plaza, Nairobi · London desk.
+    For auction inventory, see <strong>auctions.murivest.com</strong>.</p>
+  </div>
+
+</div><!-- /main-content -->
+
+<!-- ==================== ENDING ==================== -->
+<div class="ending">
+  <div class="ending-inner">
+    <div class="ending-kicker">Murivest Private Capital Portal</div>
+    <div class="ending-title">Where would you like to start?</div>
+    <div class="ending-text">
+      Verification and a first look at matched opportunities take one sitting. The desk is alongside at
+      every step after that — and if the standard is not yours, the decision to walk away remains, as
+      always, entirely yours.
+    </div>
+    <div class="ending-rule"></div>
+    <div class="ending-contact">
+      Murivest Group Ltd · Nairobi | London<br>
+      +254 115 277 610 · office@murivest.com<br>
+      auctions.murivest.com
+    </div>
+  </div>
+  <div class="ending-foot">The Investor Manual · Edition 1.0 · Strictly confidential · Not investment advice</div>
+</div>
+
+</body>
+</html>

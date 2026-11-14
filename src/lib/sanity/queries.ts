@@ -117,6 +117,8 @@ export async function getLandingContent(): Promise<LandingContentDoc | null> {
   if (!client) return null
   return client.fetch(`*[_type == "landingContent"][0] {
     heroEyebrow, heroHeadline, heroSubline, credibility, coverageMarkets,
+    directorName, directorVideoUrl, directorVideoCaption,
+    "directorVideoPosterRef": directorVideoPoster.asset->_ref,
     "valueProps": valueProps[] { _key, heading, detail }
   }`)
 }

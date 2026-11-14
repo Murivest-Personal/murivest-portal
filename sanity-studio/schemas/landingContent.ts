@@ -39,6 +39,31 @@ export default defineType({
       type: 'array',
       of: [{type: 'string'}],
     }),
+    defineField({
+      name: 'directorName',
+      title: 'Director name (video + signature)',
+      description: 'Full name shown under the Director letter signature and on the video card.',
+      type: 'string',
+    }),
+    defineField({
+      name: 'directorVideoUrl',
+      title: 'Director introduction video URL',
+      description: 'Direct mp4/webm URL (e.g. a CDN link or an uploaded file field). Overrides NEXT_PUBLIC_DIRECTOR_VIDEO_URL.',
+      type: 'url',
+    }),
+    defineField({
+      name: 'directorVideoPoster',
+      title: 'Director video poster frame',
+      description: 'Still image shown before play. Overrides NEXT_PUBLIC_DIRECTOR_VIDEO_POSTER.',
+      type: 'image',
+      options: {hotspot: true},
+    }),
+    defineField({
+      name: 'directorVideoCaption',
+      title: 'Director video caption line',
+      description: 'e.g. "Recorded at 4th Avenue Parklands, Nairobi."',
+      type: 'string',
+    }),
   ],
   preview: {
     select: {title: 'heroHeadline'},

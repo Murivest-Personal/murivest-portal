@@ -102,7 +102,7 @@ Content types (schemas in `sanity-studio/schemas/`):
 | `brief` | Orders catalogue — scope, delivery expectations, per-format pricing |
 | `document` | Data room — `accessTier` + `downloadable` flag; streamed through `/api/documents/[id]/file` with access logging |
 | `marketReport` | Market Intelligence |
-| `landingContent` | Landing page hero copy (optional) |
+| `landingContent` | Landing page hero copy + Director introduction video fields (optional overrides of the built-in sales-letter copy; `NEXT_PUBLIC_DIRECTOR_VIDEO_URL` / `_POSTER` / `_NAME` env fallbacks) |
 
 Editorial rule: **never estimate a financial field** — empty fields render "not disclosed", the portal invents nothing.
 
@@ -114,6 +114,13 @@ Editorial rule: **never estimate a financial field** — empty fields render "no
 - **Audit**: `audit_logs`, `security_events`, `document_access_logs` + DB-level triggers on orders, payments, permission changes and profile tier changes (production SQL).
 - **Payments**: M-Pesa paybill confirmation + wire reference verification by the finance desk; card gateway is a documented integration point (env-driven) that reports honestly when not installed.
 - No service secrets in the client bundle — Sanity token, session HMAC keys, gateway keys live server-side only.
+
+## Landing page & downloadable resources
+
+The public landing page is a long-form sales letter (Ogilvy-style structure, NEPQ-style tone): situation → problem → consequence → the portal's answer → “what Murivest is not” → graduated access → objection handling → close. It embeds the **Director's introduction video** (configure via Sanity `landingContent` or the `NEXT_PUBLIC_DIRECTOR_VIDEO_*` env vars) and offers two permanent downloads served from `public/downloads/`:
+
+- `murivest-portal-user-manual.pdf` — the step-by-step investor manual (also delivered in `download/`)
+- `murivest-director-video-script.md` — the word-for-word production script for the Director's video
 
 ## Deployment & operations
 
@@ -127,7 +134,7 @@ bun run dev                       # dev server
 
 Staff desk operations (verification, tier assignment, order/payment progression, advisor replies, mandate activation, document grants) run through the guarded, audit-logged `POST /api/staff` dispatcher — integrate with existing Murivest fulfilment workflows, or call from internal tooling as an admin/advisor session.
 
-Email delivery: set `RESEND_API_KEY` (+ `MAIL_FROM`). The `ALLOW_DEV_AUTH_LINKS=true` flag (dev only) returns auth links in API responses so journeys are testable before SMTP provisioning — **never enable in production**.
+Email delivery runs over **your own SMTP server** (no Resend or third-party API): set `SMTP_HOST`, `SMTP_PORT` (587 STARTTLS / 465 TLS), `SMTP_SECURE` (blank = auto), `SMTP_USER`, `SMTP_PASS` and `MAIL_FROM` in `.env`. Credentials are read from the environment only and never logged. The `ALLOW_DEV_AUTH_LINKS=true` flag (dev only) returns auth links in API responses so journeys remain testable before SMTP is configured — **never enable in production**.
 
 ## Financial calculation transparency
 
