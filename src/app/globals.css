@@ -179,6 +179,45 @@
       rgba(27, 67, 50, 0.045) 320px
     );
   }
+
+  /* ============================================================
+     RESPONSIVE OVERLAY / MODAL PRIMITIVES
+     Every modal, sheet, drawer and dropdown must keep all four
+     corners on screen — phones (incl. 320px/568px), tablets,
+     laptops, desktops. dvh tracks the mobile URL bar; the vh
+     line before it is the legacy-browser fallback.
+     ============================================================ */
+  .overlay-fill {
+    /* Centers the panel; grows (and stays reachable) when content is taller */
+    min-height: 100vh;
+    min-height: 100dvh;
+  }
+  .max-h-viewport {
+    /* Hard cap for centered dialogs — always 1rem clear of top and bottom */
+    max-height: calc(100vh - 2rem);
+    max-height: calc(100dvh - 2rem);
+  }
+  .max-h-sheet {
+    /* Cap for top/bottom sheets */
+    max-height: calc(100vh - 1.5rem);
+    max-height: calc(100dvh - 1.5rem);
+  }
+  .max-h-drawer {
+    /* Cap for bottom/top drawers */
+    max-height: 80vh;
+    max-height: 80dvh;
+  }
+  .modal-scroll {
+    /* Contained, momentum-smooth scrolling inside modal bodies */
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+  .dropdown-max-h {
+    /* Popover lists: capped by both content height and viewport height */
+    max-height: min(24rem, calc(100vh - 12rem));
+    max-height: min(24rem, calc(100dvh - 12rem));
+  }
 }
 
 /* Print: receipts, scenario exports, comparisons */

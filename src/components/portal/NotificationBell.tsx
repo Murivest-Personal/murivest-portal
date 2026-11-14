@@ -65,7 +65,10 @@ export default function NotificationBell() {
   }
 
   return (
-    <div className="relative">
+    <div>
+      {/* The dropdown anchors to the sticky portal header (nearest positioned
+          ancestor) — not to this 36px button wrapper — so on every screen width
+          it aligns with the viewport's right margin and never clips its corners. */}
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -84,7 +87,7 @@ export default function NotificationBell() {
       {open ? (
         <>
           <button type="button" aria-label="Close notifications" className="fixed inset-0 z-40 cursor-default" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 top-11 z-50 w-80 border border-border bg-card shadow-xl sm:w-96">
+          <div className="absolute right-5 top-[4.5rem] z-50 w-80 max-w-[calc(100vw-2.5rem)] border border-border bg-card shadow-xl sm:w-96">
             <div className="flex items-center justify-between border-b border-border px-4 py-3">
               <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-primary">Signals</span>
               <button
@@ -96,7 +99,7 @@ export default function NotificationBell() {
                 <CheckCheck className="h-3.5 w-3.5" /> Mark all read
               </button>
             </div>
-            <div className="portal-scroll max-h-96 overflow-y-auto">
+            <div className="portal-scroll dropdown-max-h overflow-y-auto">
               {items.length === 0 ? (
                 <div className="px-4 py-10 text-center">
                   <Bell className="mx-auto mb-3 h-8 w-8 text-gold/40" strokeWidth={1.25} />

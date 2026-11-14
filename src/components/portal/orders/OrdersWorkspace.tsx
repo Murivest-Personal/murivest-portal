@@ -1,6 +1,6 @@
 'use client'
 
-import {useState} from 'react'
+import {useEffect, useState} from 'react'
 import {useRouter} from 'next/navigation'
 import {
   BookOpen,
@@ -78,6 +78,25 @@ export default function OrdersWorkspace({briefs, orders, sanityConfigured, prese
   const [customScope, setCustomScope] = useState('')
   const [customSource, setCustomSource] = useState<'catalog' | 'auction' | 'off_market' | 'custom'>('custom')
   const [customNotice, setCustomNotice] = useState('')
+
+  // While any overlay is open: lock the page scroll beneath it and close on Escape.
+  const overlayOpen = Boolean(ordering || payModal)
+  useEffect(() => {
+    if (!overlayOpen) return
+    const previous = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setOrdering(null)
+        setPayModal(null)
+      }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.body.style.overflow = previous
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [overlayOpen])
   const [customError, setCustomError] = useState('')
 
   function openOrder(b: BriefDoc) {
@@ -108,7 +127,7 @@ export default function OrdersWorkspace({briefs, orders, sanityConfigured, prese
           sanityBriefId: ordering._id,
           briefTitle: ordering.title,
           briefType: ordering.briefType,
-          briefSource: ordering.linkedOpportunityId ? 'catalog' : ordering.auctionRef ? 'auction' : 'catalog',
+          briefSource: ordering.linkedOpportunity?._ref ? 'catalog' : ordering.auctionRef ? 'auction' : 'catalog',
           format,
           amountKes,
           amountUsd,
@@ -489,28 +508,31 @@ export default function OrdersWorkspace({briefs, orders, sanityConfigured, prese
 
       {/* ============ ORDER FORM MODAL ============ */}
       {ordering ? (
-        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4" role="dialog" aria-modal="true" aria-label="Place order">
+        <div className="modal-scroll fixed inset-0 z-50" role="dialog" aria-modal="true" aria-label="Place order">
           <button type="button" aria-label="Close" className="fixed inset-0 bg-forest-deep/70 backdrop-blur-sm" onClick={() => setOrdering(null)} />
-          <form onSubmit={placeOrder} className="relative z-10 my-8 w-full max-w-lg border border-gold/25 bg-card p-6 shadow-2xl">
-            <div className="mb-5 flex items-start justify-between">
-              <div>
-                <div className="eyebrow">Order a brief</div>
-                <h3 className="font-display text-xl text-primary">{ordering.title}</h3>
+          <div className="overlay-fill relative z-10 flex items-center justify-center p-4">
+            <form onSubmit={placeOrder} className="max-h-viewport flex w-full max-w-lg flex-col border border-gold/25 bg-card shadow-2xl">
+              <div className="flex shrink-0 items-start justify-between gap-4 border-b border-border px-5 py-4 sm:px-6 sm:py-5">
+                <div>
+                  <div className="eyebrow">Order a brief</div>
+                  <h3 className="font-display text-xl text-primary">{ordering.title}</h3>
+                </div>
+                <button type="button" onClick={() => setOrdering(null)} aria-label="Close" className="text-muted-foreground hover:text-destructive">
+                  <X className="h-5 w-5" />
+                </button>
               </div>
-              <button type="button" onClick={() => setOrdering(null)} aria-label="Close" className="text-muted-foreground hover:text-destructive">
-                <X className="h-5 w-5" />
-              </button>
-            </div>
+
+              <div className="modal-scroll portal-scroll flex-1 px-5 py-5 sm:px-6 sm:py-6">
 
             <div className="mb-5 grid grid-cols-2 gap-3">
               <button
                 type="button"
                 onClick={() => setFormat('digital')}
-                className={cn('border p-4 text-left transition-colors', format === 'digital' ? 'border-gold bg-gold/5' : 'border-border hover:border-gold/50')}
+                className={cn('min-w-0 border p-4 text-left transition-colors', format === 'digital' ? 'border-gold bg-gold/5' : 'border-border hover:border-gold/50')}
               >
                 <BookOpen className="mb-2 h-5 w-5 text-gold" />
                 <div className="font-display text-base text-primary">Digital edition</div>
-                <div className="mt-1 text-xs text-muted-foreground">
+                <div className="mt-1 break-words text-xs text-muted-foreground">
                   {ordering.pricing?.digitalKes || ordering.pricing?.digitalUsd
                     ? `${ordering.pricing.digitalKes ? `KES ${ordering.pricing.digitalKes.toLocaleString()}` : ''}${ordering.pricing.digitalKes && ordering.pricing.digitalUsd ? ' · ' : ''}${ordering.pricing.digitalUsd ? `$${ordering.pricing.digitalUsd}` : ''}`
                     : 'Complimentary · delivered to your Document Room'}
@@ -520,11 +542,11 @@ export default function OrdersWorkspace({briefs, orders, sanityConfigured, prese
                 type="button"
                 disabled={!ordering.pricing?.hardCopyAvailable}
                 onClick={() => setFormat('hard_copy')}
-                className={cn('border p-4 text-left transition-colors disabled:opacity-40', format === 'hard_copy' ? 'border-gold bg-gold/5' : 'border-border hover:border-gold/50')}
+                className={cn('min-w-0 border p-4 text-left transition-colors disabled:opacity-40', format === 'hard_copy' ? 'border-gold bg-gold/5' : 'border-border hover:border-gold/50')}
               >
                 <Package className="mb-2 h-5 w-5 text-gold" />
                 <div className="font-display text-base text-primary">Hard copy</div>
-                <div className="mt-1 text-xs text-muted-foreground">
+                <div className="mt-1 break-words text-xs text-muted-foreground">
                   {ordering.pricing?.hardCopyAvailable && (ordering.pricing.hardKes || ordering.pricing.hardUsd)
                     ? `${ordering.pricing.hardKes ? `KES ${ordering.pricing.hardKes.toLocaleString()}` : ''}${ordering.pricing.hardKes && ordering.pricing.hardUsd ? ' · ' : ''}${ordering.pricing.hardUsd ? `$${ordering.pricing.hardUsd}` : ''} · courier`
                     : 'Not offered for this brief'}
@@ -575,24 +597,29 @@ export default function OrdersWorkspace({briefs, orders, sanityConfigured, prese
             ) : null}
 
             {error ? <div className="mb-4 border-l-2 border-destructive bg-red-50 px-4 py-3 text-xs text-destructive">{error}</div> : null}
+              </div>
 
-            <button type="submit" disabled={busy} className="inline-flex w-full items-center justify-center gap-2 bg-primary px-6 py-3.5 text-xs font-semibold uppercase tracking-[0.16em] text-primary-foreground transition-colors hover:bg-forest-deep disabled:opacity-60">
-              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-              {busy ? 'Placing order…' : 'Place order'}
-            </button>
-            <p className="mt-3 text-center text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
-              Every order is audit-logged · fulfilment by the Murivest research desk
-            </p>
-          </form>
+              <div className="shrink-0 border-t border-border bg-secondary/40 px-5 py-4 sm:px-6 sm:py-5">
+                <button type="submit" disabled={busy} className="inline-flex w-full items-center justify-center gap-2 bg-primary px-6 py-3.5 text-xs font-semibold uppercase tracking-[0.16em] text-primary-foreground transition-colors hover:bg-forest-deep disabled:opacity-60">
+                  {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                  {busy ? 'Placing order…' : 'Place order'}
+                </button>
+                <p className="mt-3 text-center text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+                  Every order is audit-logged · fulfilment by the Murivest research desk
+                </p>
+              </div>
+            </form>
+          </div>
         </div>
       ) : null}
 
       {/* ============ PAYMENT MODAL ============ */}
       {payModal ? (
-        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4" role="dialog" aria-modal="true" aria-label="Complete payment">
+        <div className="modal-scroll fixed inset-0 z-50" role="dialog" aria-modal="true" aria-label="Complete payment">
           <button type="button" aria-label="Close" className="fixed inset-0 bg-forest-deep/70 backdrop-blur-sm" onClick={() => setPayModal(null)} />
-          <div className="relative z-10 my-8 w-full max-w-lg border border-gold/25 bg-card shadow-2xl">
-            <div className="flex items-start justify-between bg-primary px-6 py-5 text-primary-foreground">
+          <div className="overlay-fill relative z-10 flex items-center justify-center p-4">
+            <div className="max-h-viewport flex w-full max-w-lg flex-col border border-gold/25 bg-card shadow-2xl">
+            <div className="flex shrink-0 items-start justify-between gap-4 bg-primary px-5 py-4 text-primary-foreground sm:px-6 sm:py-5">
               <div>
                 <div className="text-[10px] uppercase tracking-[0.18em] text-ivory/60">Complete payment</div>
                 <h3 className="font-display text-xl">{payModal.briefTitle}</h3>
@@ -606,7 +633,7 @@ export default function OrdersWorkspace({briefs, orders, sanityConfigured, prese
             </div>
 
             {payModal.paymentMethod === 'card' ? (
-              <div className="p-6">
+              <div className="modal-scroll portal-scroll flex-1 p-5 sm:p-6">
                 <p className="text-sm leading-relaxed text-muted-foreground">
                   Card processing is not yet enabled on this environment. Your order is reserved — complete it instantly via M-Pesa or bank wire below, or contact your advisor to arrange card settlement.
                 </p>
@@ -620,7 +647,7 @@ export default function OrdersWorkspace({briefs, orders, sanityConfigured, prese
                 </div>
               </div>
             ) : payModal.paymentMethod === 'mpesa' ? (
-              <form onSubmit={submitPayment} className="space-y-5 p-6">
+              <form onSubmit={submitPayment} className="modal-scroll portal-scroll flex-1 space-y-5 p-5 sm:p-6">
                 {MPESA.paybill ? (
                   <div className="grid grid-cols-3 gap-2 text-center">
                     <div className="bg-secondary p-3">
@@ -653,7 +680,7 @@ export default function OrdersWorkspace({briefs, orders, sanityConfigured, prese
                 <p className="text-center text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Finance verifies every payment before preparation begins</p>
               </form>
             ) : (
-              <form onSubmit={submitPayment} className="space-y-5 p-6">
+              <form onSubmit={submitPayment} className="modal-scroll portal-scroll flex-1 space-y-5 p-5 sm:p-6">
                 <div className="bg-secondary p-4 text-xs leading-relaxed text-muted-foreground">
                   <div className="eyebrow mb-2">Bank wire</div>
                   {process.env.NEXT_PUBLIC_WIRE_INSTRUCTIONS || 'Wire instructions (account, bank, reference format) are configured by Murivest per environment. Use your order reference as the payment narrative so finance can reconcile instantly.'}
@@ -669,6 +696,7 @@ export default function OrdersWorkspace({briefs, orders, sanityConfigured, prese
                 </button>
               </form>
             )}
+            </div>
           </div>
         </div>
       ) : null}

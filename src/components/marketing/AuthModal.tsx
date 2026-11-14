@@ -12,7 +12,7 @@ import {Wordmark} from '@/components/brand/Wordmark'
  * classification-aware) · Request private access (invitation-oriented).
  */
 
-type Mode = 'signin' | 'register' | 'access'
+export type Mode = 'signin' | 'register' | 'access'
 type Intent = 'individual' | 'uhnwi' | 'institutional_rep'
 
 const input =
@@ -64,6 +64,22 @@ export default function AuthModal({
       setNotice('This area requires authentication. Sign in or request private access.')
     }
   }, [open])
+
+  // While the modal is open: lock the page scroll beneath it and allow
+  // Escape to close — standard behaviour investors expect on every device.
+  useEffect(() => {
+    if (!open) return
+    const previous = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.body.style.overflow = previous
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open, onClose])
 
   if (!open) return null
 
@@ -170,11 +186,15 @@ export default function AuthModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4 sm:items-center" role="dialog" aria-modal="true" aria-label="Authentication">
-      <button type="button" aria-label="Close" className="absolute inset-0 bg-forest-deep/70 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative z-10 my-8 w-full max-w-md border border-gold/25 bg-card shadow-2xl">
+    <div className="modal-scroll fixed inset-0 z-50" role="dialog" aria-modal="true" aria-label="Authentication">
+      {/* Backdrop is fixed to the viewport — it never scrolls away from the panel */}
+      <button type="button" aria-label="Close" className="fixed inset-0 bg-forest-deep/70 backdrop-blur-sm" onClick={onClose} />
+      {/* dvh-height centering wrapper: centers when short, stays reachable when tall */}
+      <div className="overlay-fill relative z-10 flex items-center justify-center p-4 sm:p-6">
+        {/* Panel is hard-capped to the viewport (max-h-viewport) so every corner stays on screen; only the body scrolls */}
+        <div className="max-h-viewport flex w-full max-w-md flex-col border border-gold/25 bg-card shadow-2xl">
         {/* Head */}
-        <div className="flex items-start justify-between border-b border-border bg-primary px-6 py-5">
+        <div className="flex shrink-0 items-start justify-between border-b border-border bg-primary px-5 py-4 sm:px-6 sm:py-5">
           <div>
             <Wordmark size="sm" tone="ivory" />
             <div className="mt-1 text-[10px] uppercase tracking-[0.18em] text-ivory/60">
@@ -187,7 +207,7 @@ export default function AuthModal({
         </div>
 
         {/* Mode tabs */}
-        <div className="grid grid-cols-3 border-b border-border text-center text-[11px] uppercase tracking-[0.14em]">
+        <div className="grid shrink-0 grid-cols-3 border-b border-border text-center text-[10px] uppercase leading-tight tracking-[0.12em] sm:text-[11px] sm:tracking-[0.14em]">
           {(['signin', 'register', 'access'] as Mode[]).map((m) => (
             <button
               key={m}
@@ -197,14 +217,14 @@ export default function AuthModal({
                 setError('')
                 setNotice('')
               }}
-              className={`px-2 py-3 transition-colors ${mode === m ? 'bg-gold/10 font-semibold text-primary' : 'text-muted-foreground hover:text-foreground'}`}
+              className={`px-1 py-2.5 transition-colors sm:px-2 sm:py-3 ${mode === m ? 'bg-gold/10 font-semibold text-primary' : 'text-muted-foreground hover:text-foreground'}`}
             >
               {m === 'signin' ? 'Sign in' : m === 'register' ? 'Register' : 'Request access'}
             </button>
           ))}
         </div>
 
-        <div className="px-6 py-6">
+        <div className="modal-scroll portal-scroll flex-1 px-5 py-5 sm:px-6 sm:py-6">
           {notice ? <div className="mb-4 border-l-2 border-gold bg-gold/5 px-4 py-3 text-xs leading-relaxed text-primary">{notice}</div> : null}
           {devLink ? (
             <div className="mb-4 border border-gold/30 bg-secondary px-4 py-3 text-xs text-muted-foreground">
@@ -341,8 +361,9 @@ export default function AuthModal({
           )}
         </div>
 
-        <div className="border-t border-border bg-secondary/50 px-6 py-3 text-center text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+        <div className="shrink-0 border-t border-border bg-secondary/50 px-5 py-3 text-center text-[10px] uppercase tracking-[0.16em] text-muted-foreground sm:px-6">
           Confidential environment · {new Date().getFullYear()} Murivest Group Ltd
+        </div>
         </div>
       </div>
     </div>
