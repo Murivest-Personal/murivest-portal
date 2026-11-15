@@ -1,0 +1,599 @@
+     1→-- =============================================================================
+     2→-- MURIVEST PRIVATE CAPITAL PORTAL — 001_schema.sql
+     3→-- Production PostgreSQL schema (PostgreSQL 14+; Supabase-compatible).
+     4→--
+     5→-- Creates every table backing each interaction with the portal:
+     6→--   • authentication (users, sessions, tokens, security events)
+     7→--   • organisations & membership
+     8→--   • investor profiles, verification pipeline & criteria
+     9→--   • interaction with Sanity-sourced content (saved / viewed opportunities,
+    10→--     saved searches)
+    11→--   • Investment Studio (scenarios, comparisons)
+    12→--   • Orders & payments (private / institutional briefs)
+    13→--   • Mandates & milestones
+    14→--   • Communications (enquiries, messages, notifications)
+    15→--   • Secure data room (document grants, access logs, requests, NDA)
+    16→--   • Portfolio & capital calls
+    17→--   • Audit trail
+    18→--
+    19→-- Content itself (opportunities, briefs, documents, market reports) is
+    20→-- authored in Sanity and fetched via GROQ; local tables reference content
+    21→-- by Sanity document id (`sanity_*` columns).
+    22→--
+    23→-- Ids are TEXT (cuid generated application-side). Apply with psql:
+    24→--   psql "$DATABASE_URL" -f sql/001_schema.sql
+    25→--   psql "$DATABASE_URL" -f sql/002_rls.sql
+    26→--   psql "$DATABASE_URL" -f sql/003_functions.sql
+    27→-- =============================================================================
+    28→
+    29→BEGIN;
+    30→
+    31→CREATE SCHEMA IF NOT EXISTS portal;
+    32→CREATE SCHEMA IF NOT EXISTS audit;
+    33→
+    34→-- -----------------------------------------------------------------------------
+    35→-- Enumerated domains (mirrored app-side by zod validation in src/lib/validation.ts)
+    36→-- -----------------------------------------------------------------------------
+    37→CREATE TYPE portal.user_role          AS ENUM ('investor','advisor','admin');
+    38→CREATE TYPE portal.account_status      AS ENUM ('active','suspended','locked');
+    39→
+    40→CREATE TYPE portal.classification     AS ENUM ('individual','uhnwi','institutional_rep');
+    41→CREATE TYPE portal.verification_status AS ENUM ('unverified','email_verified','profile_submitted','kyc_pending','in_review','verified','rejected');
+    42→CREATE TYPE portal.kyc_status         AS ENUM ('not_started','submitted','in_review','approved','rejected');
+    43→CREATE TYPE portal.aml_status          AS ENUM ('not_started','clear','flagged');
+    44→CREATE TYPE portal.access_tier         AS ENUM ('tier_1','tier_2','tier_3');
+    45→CREATE TYPE portal.risk_tolerance      AS ENUM ('conservative','balanced','opportunistic','distressed');
+    46→
+    47→CREATE TYPE portal.token_purpose       AS ENUM ('email_verify','magic_link','password_reset');
+    48→CREATE TYPE portal.security_event_type AS ENUM ('login','login_failed','logout','new_device','mfa_enabled','mfa_disabled','password_changed','session_revoked','account_locked');
+    49→
+    50→CREATE TYPE portal.org_type            AS ENUM ('family_office','fund','corporate','endowment','pension','institution','other');
+    51→CREATE TYPE portal.org_member_role     AS ENUM ('admin','member','analyst');
+    52→CREATE TYPE portal.org_member_status  AS ENUM ('invited','active','removed');
+    53→
+    54→CREATE TYPE portal.order_source        AS ENUM ('catalog','auction','off_market','custom');
+    55→CREATE TYPE portal.order_type          AS ENUM ('private_brief','institutional_brief','custom');
+    56→CREATE TYPE portal.order_format       AS ENUM ('digital','hard_copy');
+    57→CREATE TYPE portal.order_status        AS ENUM ('pending','awaiting_payment','payment_confirmed','processing','ready','delivered','cancelled');
+    58→CREATE TYPE portal.payment_method     AS ENUM ('mpesa','wire','card');
+    59→CREATE TYPE portal.payment_status     AS ENUM ('submitted','verified','rejected','failed');
+    60→
+    61→CREATE TYPE portal.mandate_status      AS ENUM ('draft','submitted','active','paused','closed','rejected');
+    62→CREATE TYPE portal.milestone_status    AS ENUM ('pending','in_progress','done','blocked');
+    63→
+    64→CREATE TYPE portal.enquiry_status      AS ENUM ('open','responded','closed');
+    65→CREATE TYPE portal.message_sender     AS ENUM ('investor','advisor','system');
+    66→
+    67→CREATE TYPE portal.notification_type   AS ENUM ('order_status','message','mandate','document','match','security','system');
+    68→
+    69→CREATE TYPE portal.doc_permission     AS ENUM ('view','download');
+    70→CREATE TYPE portal.doc_request_type    AS ENUM ('data_room','report','model','legal','custom');
+    71→CREATE TYPE portal.doc_request_status  AS ENUM ('submitted','in_review','ready','declined');
+    72→CREATE TYPE portal.doc_access_action   AS ENUM ('view','download','request');
+    73→
+    74→CREATE TYPE portal.position_status     AS ENUM ('committed','held','exited');
+    75→CREATE TYPE portal.capital_call_status AS ENUM ('scheduled','called','paid','waived');
+    76→CREATE TYPE portal.actor_type          AS ENUM ('user','advisor','admin','system');
+    77→
+    78→-- -----------------------------------------------------------------------------
+    79→-- Authentication & identity
+    80→-- -----------------------------------------------------------------------------
+    81→CREATE TABLE portal.users (
+    82→  id                TEXT PRIMARY KEY,
+    83→  email             TEXT NOT NULL UNIQUE,
+    84→  password_hash     TEXT,                          -- scrypt; NULL => magic-link/SSO-only
+    85→  full_name         TEXT,
+    86→  role              portal.user_role       NOT NULL DEFAULT 'investor',
+    87→  status            portal.account_status  NOT NULL DEFAULT 'active',
+    88→  email_verified_at TIMESTAMPTZ,
+    89→  mfa_enabled       BOOLEAN NOT NULL DEFAULT FALSE,
+    90→  mfa_secret_enc    TEXT,                          -- AES-256-GCM encrypted TOTP secret
+    91→  last_login_at     TIMESTAMPTZ,
+    92→  failed_logins     INTEGER NOT NULL DEFAULT 0,
+    93→  locked_until      TIMESTAMPTZ,
+    94→  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    95→  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+    96→);
+    97→CREATE INDEX portal_users_role_idx ON portal.users (role);
+    98→
+    99→CREATE TABLE portal.sessions (
+   100→  id          TEXT PRIMARY KEY,
+   101→  user_id     TEXT NOT NULL REFERENCES portal.users(id) ON DELETE CASCADE,
+   102→  token_hash  TEXT NOT NULL UNIQUE,                -- sha-256 of opaque cookie token
+   103→  user_agent  TEXT,
+   104→  ip          INET,
+   105→  device      TEXT,
+   106→  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+   107→  last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+   108→  expires_at  TIMESTAMPTZ NOT NULL,
+   109→  revoked_at  TIMESTAMPTZ
+   110→);
+   111→CREATE INDEX portal_sessions_user_idx ON portal.sessions (user_id, last_seen_at);
+   112→
+   113→CREATE TABLE portal.auth_tokens (
+   114→  id         TEXT PRIMARY KEY,
+   115→  user_id    TEXT NOT NULL REFERENCES portal.users(id) ON DELETE CASCADE,
+   116→  token_hash TEXT NOT NULL UNIQUE,
+   117→  purpose    portal.token_purpose NOT NULL,
+   118→  expires_at TIMESTAMPTZ NOT NULL,
+   119→  used_at    TIMESTAMPTZ,
+   120→  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+   121→);
+   122→CREATE INDEX portal_auth_tokens_user_idx ON portal.auth_tokens (user_id, purpose);
+   123→
+   124→CREATE TABLE portal.security_events (
+   125→  id         TEXT PRIMARY KEY,
+   126→  user_id    TEXT REFERENCES portal.users(id) ON DELETE CASCADE,
+   127→  type       portal.security_event_type NOT NULL,
+   128→  ip         INET,
+   129→  user_agent TEXT,
+   130→  detail     JSONB,
+   131→  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+   132→);
+   133→CREATE INDEX portal_security_events_user_idx ON portal.security_events (user_id, created_at);
+   134→
+   135→-- -----------------------------------------------------------------------------
+   136→-- Organisations
+   137→-- -----------------------------------------------------------------------------
+   138→CREATE TABLE portal.organisations (
+   139→  id           TEXT PRIMARY KEY,
+   140→  name         TEXT NOT NULL,
+   141→  legal_name   TEXT,
+   142→  type         portal.org_type NOT NULL DEFAULT 'institution',
+   143→  country      TEXT,
+   144→  website      TEXT,
+   145→  verified     BOOLEAN NOT NULL DEFAULT FALSE,
+   146→  created_by_id TEXT NOT NULL REFERENCES portal.users(id),
+   147→  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+   148→  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+   149→  UNIQUE (name, type)
+   150→);
+   151→
+   152→CREATE TABLE portal.organisation_members (
+   153→  id              TEXT PRIMARY KEY,
+   154→  organisation_id TEXT NOT NULL REFERENCES portal.organisations(id) ON DELETE CASCADE,
+   155→  user_id         TEXT NOT NULL REFERENCES portal.users(id) ON DELETE CASCADE,
+   156→  role            portal.org_member_role NOT NULL DEFAULT 'member',
+   157→  title           TEXT,
+   158→  status          portal.org_member_status NOT NULL DEFAULT 'invited',
+   159→  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+   160→  UNIQUE (organisation_id, user_id)
+   161→);
+   162→
+   163→-- -----------------------------------------------------------------------------
+   164→-- Investor profile & criteria
+   165→-- -----------------------------------------------------------------------------
+   166→CREATE TABLE portal.investor_profiles (
+   167→  id                 TEXT PRIMARY KEY,
+   168→  user_id            TEXT NOT NULL UNIQUE REFERENCES portal.users(id) ON DELETE CASCADE,
+   169→  classification     portal.classification NOT NULL DEFAULT 'individual',
+   170→  organisation_id    TEXT REFERENCES portal.organisations(id),
+   171→  job_title          TEXT,
+   172→  nationality        TEXT,
+   173→  country_residence  TEXT,
+   174→  phone              TEXT,
+   175→  capital_currency   TEXT NOT NULL DEFAULT 'USD',
+   176→  equity_available  NUMERIC(18,2),
+   177→  total_capacity     NUMERIC(18,2),
+   178→  capital_floor      NUMERIC(18,2),
+   179→  capital_ceiling    NUMERIC(18,2),
+   180→  verification_status portal.verification_status NOT NULL DEFAULT 'unverified',
+   181→  kyc_status         portal.kyc_status  NOT NULL DEFAULT 'not_started',
+   182→  aml_status         portal.aml_status NOT NULL DEFAULT 'not_started',
+   183→  access_tier        portal.access_tier NOT NULL DEFAULT 'tier_1',
+   184→  nda_accepted       BOOLEAN NOT NULL DEFAULT FALSE,
+   185→  onboarding_step    INTEGER NOT NULL DEFAULT 1,
+   186→  advisor_id         TEXT REFERENCES portal.users(id),
+   187→  source             TEXT,
+   188→  notes              TEXT,
+   189→  preferences        JSONB,  -- communication preferences
+   190→  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+   191→  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+   192→);
+   193→CREATE INDEX portal_profiles_verification_idx ON portal.investor_profiles (verification_status);
+   194→
+   195→CREATE TABLE portal.investor_criteria (
+   196→  id                  TEXT PRIMARY KEY,
+   197→  user_id             TEXT NOT NULL UNIQUE REFERENCES portal.users(id) ON DELETE CASCADE,
+   198→  currency            TEXT NOT NULL DEFAULT 'USD',
+   199→  equity_available    NUMERIC(18,2),
+   200→  total_capacity      NUMERIC(18,2),
+   201→  min_ticket          NUMERIC(18,2),
+   202→  max_ticket          NUMERIC(18,2),
+   203→  geographies         JSONB,
+   204→  asset_classes       JSONB,
+   205→  structures          JSONB,
+   206→  min_gross_yield     NUMERIC(6,4),
+   207→  min_net_yield       NUMERIC(6,4),
+   208→  target_irr          NUMERIC(6,4),
+   209→  target_cash_on_cash NUMERIC(6,4),
+   210→  target_payback_years NUMERIC(6,2),
+   211→  hold_period_min     NUMERIC(6,2),
+   212→  hold_period_max     NUMERIC(6,2),
+   213→  leverage_comfort    NUMERIC(5,2),
+   214→  financing_open      BOOLEAN NOT NULL DEFAULT TRUE,
+   215→  risk_tolerance      portal.risk_tolerance,
+   216→  exit_preferences    JSONB,
+   217→  currency_note       TEXT,
+   218→  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+   219→  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+   220→);
+   221→
+   222→-- -----------------------------------------------------------------------------
+   223→-- Interaction with Sanity-sourced opportunities
+   224→-- -----------------------------------------------------------------------------
+   225→CREATE TABLE portal.saved_opportunities (
+   226→  id         TEXT PRIMARY KEY,
+   227→  user_id    TEXT NOT NULL REFERENCES portal.users(id) ON DELETE CASCADE,
+   228→  sanity_id  TEXT NOT NULL,
+   229→  note       TEXT,
+   230→  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+   231→  UNIQUE (user_id, sanity_id)
+   232→);
+   233→CREATE INDEX portal_saved_opps_user_idx ON portal.saved_opportunities (user_id, created_at);
+   234→
+   235→CREATE TABLE portal.opportunity_views (
+   236→  id        TEXT PRIMARY KEY,
+   237→  user_id   TEXT NOT NULL REFERENCES portal.users(id) ON DELETE CASCADE,
+   238→  sanity_id TEXT NOT NULL,
+   239→  viewed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+   240→);
+   241→CREATE INDEX portal_opp_views_content_idx ON portal.opportunity_views (sanity_id, viewed_at);
+   242→CREATE INDEX portal_opp_views_user_idx ON portal.opportunity_views (user_id, viewed_at);
+   243→
+   244→CREATE TABLE portal.saved_searches (
+   245→  id           TEXT PRIMARY KEY,
+   246→  user_id      TEXT NOT NULL REFERENCES portal.users(id) ON DELETE CASCADE,
+   247→  name         TEXT NOT NULL,
+   248→  filters      JSONB NOT NULL,
+   249→  alert_on_new BOOLEAN NOT NULL DEFAULT FALSE,
+   250→  last_alert_at TIMESTAMPTZ,
+   251→  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+   252→);
+   253→CREATE INDEX portal_saved_searches_user_idx ON portal.saved_searches (user_id);
+   254→
+   255→-- -----------------------------------------------------------------------------
+   256→-- Investment Studio
+   257→-- -----------------------------------------------------------------------------
+   258→CREATE TABLE portal.scenarios (
+   259→  id                   TEXT PRIMARY KEY,
+   260→  user_id             TEXT NOT NULL REFERENCES portal.users(id) ON DELETE CASCADE,
+   261→  name                TEXT NOT NULL,
+   262→  sanity_opportunity_id TEXT,
+   263→  opportunity_title   TEXT,
+   264→  inputs              JSONB NOT NULL,     -- full transparent assumption set
+   265→  summary             JSONB,              -- computed metrics snapshot at save
+   266→  notes               TEXT,
+   267→  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+   268→  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+   269→);
+   270→CREATE INDEX portal_scenarios_user_idx ON portal.scenarios (user_id, updated_at);
+   271→
+   272→CREATE TABLE portal.comparisons (
+   273→  id          TEXT PRIMARY KEY,
+   274→  user_id     TEXT NOT NULL REFERENCES portal.users(id) ON DELETE CASCADE,
+   275→  name        TEXT NOT NULL,
+   276→  sanity_ids  JSONB NOT NULL DEFAULT '[]'::jsonb,
+   277→  scenario_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+   278→  snapshot    JSONB,
+   279→  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+   280→  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+   281→);
+   282→CREATE INDEX portal_comparisons_user_idx ON portal.comparisons (user_id, updated_at);
+   283→
+   284→-- -----------------------------------------------------------------------------
+   285→-- Orders & payments
+   286→-- -----------------------------------------------------------------------------
+   287→CREATE TABLE portal.orders (
+   288→  id                   TEXT PRIMARY KEY,
+   289→  reference            TEXT NOT NULL UNIQUE,        -- MVR-ORD-XXXXXX
+   290→  user_id              TEXT NOT NULL REFERENCES portal.users(id) ON DELETE CASCADE,
+   291→  brief_source         portal.order_source NOT NULL DEFAULT 'catalog',
+   292→  sanity_brief_id      TEXT,
+   293→  sanity_opportunity_id TEXT,
+   294→  brief_title          TEXT NOT NULL,               -- snapshot at order time
+   295→  brief_type           portal.order_type NOT NULL DEFAULT 'private_brief',
+   296→  format               portal.order_format NOT NULL DEFAULT 'digital',
+   297→  custom_scope         TEXT,
+   298→  amount_kes           NUMERIC(18,2) NOT NULL DEFAULT 0,
+   299→  amount_usd           NUMERIC(18,2) NOT NULL DEFAULT 0,
+   300→  currency             TEXT NOT NULL DEFAULT 'KES',
+   301→  status               portal.order_status NOT NULL DEFAULT 'pending',
+   302→  payment_method       portal.payment_method,
+   303→  transaction_id       TEXT,
+   304→  contact_name         TEXT,
+   305→  contact_email        TEXT,
+   306→  organisation         TEXT,
+   307→  shipping_address     TEXT,
+   308→  phone                TEXT,
+   309→  delivery_method      TEXT,                        -- secure_download | courier
+   310→  tracking_number      TEXT,
+   311→  cancelled_at         TIMESTAMPTZ,
+   312→  cancellation_reason  TEXT,
+   313→  delivered_at         TIMESTAMPTZ,
+   314→  created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+   315→  updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+   316→  CONSTRAINT orders_amount_nonnegative CHECK (amount_kes >= 0 AND amount_usd >= 0)
+   317→);
+   318→CREATE INDEX portal_orders_user_idx ON portal.orders (user_id, created_at);
+   319→CREATE INDEX portal_orders_status_idx ON portal.orders (status);
+   320→
+   321→CREATE TABLE portal.payments (
+   322→  id               TEXT PRIMARY KEY,
+   323→  order_id         TEXT NOT NULL REFERENCES portal.orders(id) ON DELETE CASCADE,
+   324→  user_id          TEXT NOT NULL REFERENCES portal.users(id) ON DELETE CASCADE,
+   325→  method           portal.payment_method NOT NULL,
+   326→  amount_kes       NUMERIC(18,2) NOT NULL DEFAULT 0,
+   327→  amount_usd       NUMERIC(18,2) NOT NULL DEFAULT 0,
+   328→  currency         TEXT NOT NULL DEFAULT 'KES',
+   329→  reference        TEXT,
+   330→  confirmation_raw TEXT,
+   331→  status           portal.payment_status NOT NULL DEFAULT 'submitted',
+   332→  verified_by_id   TEXT REFERENCES portal.users(id),
+   333→  verified_at      TIMESTAMPTZ,
+   334→  note             TEXT,
+   335→  created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+   336→);
+   337→CREATE INDEX portal_payments_order_idx ON portal.payments (order_id);
+   338→CREATE INDEX portal_payments_status_idx ON portal.payments (status);
+   339→
+   340→-- -----------------------------------------------------------------------------
+   341→-- Mandates
+   342→-- -----------------------------------------------------------------------------
+   343→CREATE TABLE portal.mandates (
+   344→  id                   TEXT PRIMARY KEY,
+   345→  reference            TEXT NOT NULL UNIQUE,        -- MVR-MND-XXXXXX
+   346→  user_id              TEXT NOT NULL REFERENCES portal.users(id) ON DELETE CASCADE,
+   347→  title                TEXT NOT NULL,
+   348→  status               portal.mandate_status NOT NULL DEFAULT 'draft',
+   349→  description          TEXT,
+   350→  target_allocation_min NUMERIC(18,2),
+   351→  target_allocation_max NUMERIC(18,2),
+   352→  currency             TEXT NOT NULL DEFAULT 'USD',
+   353→  geographies          JSONB,
+   354→  asset_classes        JSONB,
+   355→  structures           JSONB,
+   356→  min_net_yield        NUMERIC(6,4),
+   357→  target_irr           NUMERIC(6,4),
+   358→  hold_period_min      NUMERIC(6,2),
+   359→  hold_period_max      NUMERIC(6,2),
+   360→  leverage_comfort     NUMERIC(5,2),
+   361→  risk_mandate         portal.risk_tolerance,
+   362→  exclusions           JSONB,
+   363→  advisor_id           TEXT REFERENCES portal.users(id),
+   364→  submitted_at         TIMESTAMPTZ,
+   365→  activated_at         TIMESTAMPTZ,
+   366→  closed_at           TIMESTAMPTZ,
+   367→  created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+   368→  updated_at           TIMESTAMPTZ NOT NULL DEFAULT now()
+   369→);
+   370→CREATE INDEX portal_mandates_user_idx ON portal.mandates (user_id, status);
+   371→
+   372→CREATE TABLE portal.mandate_milestones (
+   373→  id           TEXT PRIMARY KEY,
+   374→  mandate_id   TEXT NOT NULL REFERENCES portal.mandates(id) ON DELETE CASCADE,
+   375→  title        TEXT NOT NULL,
+   376→  detail       TEXT,
+   377→  due_date     TIMESTAMPTZ,
+   378→  status       portal.milestone_status NOT NULL DEFAULT 'pending',
+   379→  completed_at TIMESTAMPTZ,
+   380→  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+   381→);
+   382→CREATE INDEX portal_milestones_mandate_idx ON portal.mandate_milestones (mandate_id);
+   383→
+   384→-- -----------------------------------------------------------------------------
+   385→-- Communications
+   386→-- -----------------------------------------------------------------------------
+   387→CREATE TABLE portal.enquiries (
+   388→  id                   TEXT PRIMARY KEY,
+   389→  user_id              TEXT NOT NULL REFERENCES portal.users(id) ON DELETE CASCADE,
+   390→  subject              TEXT NOT NULL,
+   391→  message              TEXT NOT NULL,
+   392→  sanity_opportunity_id TEXT,
+   393→  opportunity_title    TEXT,
+   394→  status               portal.enquiry_status NOT NULL DEFAULT 'open',
+   395→  created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+   396→  updated_at           TIMESTAMPTZ NOT NULL DEFAULT now()
+   397→);
+   398→CREATE INDEX portal_enquiries_user_idx ON portal.enquiries (user_id, created_at);
+   399→
+   400→CREATE TABLE portal.messages (
+   401→  id          TEXT PRIMARY KEY,
+   402→  user_id     TEXT NOT NULL REFERENCES portal.users(id) ON DELETE CASCADE,  -- investor thread owner
+   403→  sender_type portal.message_sender NOT NULL DEFAULT 'investor',
+   404→  sender_id   TEXT REFERENCES portal.users(id),
+   405→  enquiry_id  TEXT REFERENCES portal.enquiries(id) ON DELETE CASCADE,
+   406→  body        TEXT NOT NULL,
+   407→  read_at     TIMESTAMPTZ,
+   408→  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+   409→);
+   410→CREATE INDEX portal_messages_user_idx ON portal.messages (user_id, created_at);
+   411→CREATE INDEX portal_messages_enquiry_idx ON portal.messages (enquiry_id);
+   412→
+   413→CREATE TABLE portal.notifications (
+   414→  id         TEXT PRIMARY KEY,
+   415→  user_id    TEXT NOT NULL REFERENCES portal.users(id) ON DELETE CASCADE,
+   416→  type       portal.notification_type NOT NULL,
+   417→  title      TEXT NOT NULL,
+   418→  body       TEXT,
+   419→  link       TEXT,
+   420→  read_at    TIMESTAMPTZ,
+   421→  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+   422→);
+   423→CREATE INDEX portal_notifications_user_idx ON portal.notifications (user_id, read_at);
+   424→
+   425→-- -----------------------------------------------------------------------------
+   426→-- Secure data room
+   427→-- -----------------------------------------------------------------------------
+   428→CREATE TABLE portal.document_grants (
+   429→  id                 TEXT PRIMARY KEY,
+   430→  sanity_document_id TEXT NOT NULL,
+   431→  user_id            TEXT REFERENCES portal.users(id) ON DELETE CASCADE,
+   432→  organisation_id    TEXT REFERENCES portal.organisations(id) ON DELETE CASCADE,
+   433→  granted_by_id      TEXT NOT NULL REFERENCES portal.users(id),
+   434→  permission         portal.doc_permission NOT NULL DEFAULT 'view',
+   435→  expires_at         TIMESTAMPTZ,
+   436→  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+   437→  CONSTRAINT grant_target CHECK (user_id IS NOT NULL OR organisation_id IS NOT NULL),
+   438→  UNIQUE (sanity_document_id, user_id, organisation_id)
+   439→);
+   440→
+   441→CREATE TABLE portal.document_access_logs (
+   442→  id                TEXT PRIMARY KEY,
+   443→  user_id           TEXT NOT NULL REFERENCES portal.users(id) ON DELETE CASCADE,
+   444→  sanity_document_id TEXT NOT NULL,
+   445→  document_title    TEXT,
+   446→  action            portal.doc_access_action NOT NULL,
+   447→  ip                INET,
+   448→  user_agent        TEXT,
+   449→  created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+   450→);
+   451→CREATE INDEX portal_doc_access_user_idx ON portal.document_access_logs (user_id, created_at);
+   452→CREATE INDEX portal_doc_access_doc_idx ON portal.document_access_logs (sanity_document_id, created_at);
+   453→
+   454→CREATE TABLE portal.document_requests (
+   455→  id                  TEXT PRIMARY KEY,
+   456→  user_id             TEXT NOT NULL REFERENCES portal.users(id) ON DELETE CASCADE,
+   457→  subject             TEXT NOT NULL,
+   458→  detail              TEXT,
+   459→  sanity_opportunity_id TEXT,
+   460→  type                portal.doc_request_type NOT NULL DEFAULT 'data_room',
+   461→  status              portal.doc_request_status NOT NULL DEFAULT 'submitted',
+   462→  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+   463→  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+   464→);
+   465→CREATE INDEX portal_doc_requests_user_idx ON portal.document_requests (user_id, status);
+   466→
+   467→CREATE TABLE portal.nda_agreements (
+   468→  id         TEXT PRIMARY KEY,
+   469→  user_id    TEXT NOT NULL REFERENCES portal.users(id) ON DELETE CASCADE,
+   470→  version    TEXT NOT NULL,
+   471→  ip         INET,
+   472→  user_agent TEXT,
+   473→  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+   474→  UNIQUE (user_id, version)
+   475→);
+   476→
+   477→-- -----------------------------------------------------------------------------
+   478→-- Portfolio & capital calls
+   479→-- -----------------------------------------------------------------------------
+   480→CREATE TABLE portal.portfolio_positions (
+   481→  id                  TEXT PRIMARY KEY,
+   482→  user_id             TEXT NOT NULL REFERENCES portal.users(id) ON DELETE CASCADE,
+   483→  name                TEXT NOT NULL,
+   484→  sanity_opportunity_id TEXT,
+   485→  asset_class         TEXT,
+   486→  geography           TEXT,
+   487→  status              portal.position_status NOT NULL DEFAULT 'committed',
+   488→  acquisition_date    TIMESTAMPTZ,
+   489→  purchase_price      NUMERIC(18,2),
+   490→  currency            TEXT NOT NULL DEFAULT 'USD',
+   491→  equity_deployed     NUMERIC(18,2),
+   492→  debt_amount         NUMERIC(18,2),
+   493→  debt_rate           NUMERIC(6,4),
+   494→  debt_maturity       TIMESTAMPTZ,
+   495→  gross_income_annual NUMERIC(18,2),
+   496→  operating_expenses  NUMERIC(18,2),
+   497→  noi_actual          NUMERIC(18,2),
+   498→  occupancy_pct       NUMERIC(5,2),
+   499→  valuation           NUMERIC(18,2),
+   500→  valuation_date      TIMESTAMPTZ,
+   501→  valuation_basis     TEXT,
+   502→  notes               TEXT,
+   503→  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+   504→  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+   505→);
+   506→CREATE INDEX portal_positions_user_idx ON portal.portfolio_positions (user_id, status);
+   507→
+   508→CREATE TABLE portal.capital_calls (
+   509→  id          TEXT PRIMARY KEY,
+   510→  position_id TEXT NOT NULL REFERENCES portal.portfolio_positions(id) ON DELETE CASCADE,
+   511→  label       TEXT NOT NULL,
+   512→  amount      NUMERIC(18,2) NOT NULL,
+   513→  currency    TEXT NOT NULL DEFAULT 'USD',
+   514→  due_date    TIMESTAMPTZ,
+   515→  status      portal.capital_call_status NOT NULL DEFAULT 'scheduled',
+   516→  called_at   TIMESTAMPTZ,
+   517→  paid_at     TIMESTAMPTZ,
+   518→  notes       TEXT,
+   519→  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+   520→);
+   521→CREATE INDEX portal_capital_calls_idx ON portal.capital_calls (position_id, status);
+   522→
+   523→-- -----------------------------------------------------------------------------
+   524→-- Audit trail
+   525→-- -----------------------------------------------------------------------------
+   526→CREATE TABLE audit.logs (
+   527→  id         TEXT PRIMARY KEY,
+   528→  actor_id   TEXT,
+   529→  actor_type portal.actor_type NOT NULL DEFAULT 'user',
+   530→  action     TEXT NOT NULL,          -- e.g. auth.login, order.created, document.downloaded, permission.changed
+   531→  entity     TEXT,
+   532→  entity_id  TEXT,
+   533→  detail     JSONB,
+   534→  ip         INET,
+   535→  user_agent TEXT,
+   536→  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+   537→);
+   538→CREATE INDEX audit_logs_created_idx    ON audit.logs (created_at);
+   539→CREATE INDEX audit_logs_actor_idx      ON audit.logs (actor_id, created_at);
+   540→CREATE INDEX audit_logs_entity_idx     ON audit.logs (entity, entity_id);
+   541→
+   542→-- -----------------------------------------------------------------------------
+   543→-- Shared triggers: updated_at maintenance + critical-action audit capture
+   544→-- -----------------------------------------------------------------------------
+   545→CREATE OR REPLACE FUNCTION portal.touch_updated_at() RETURNS trigger AS $$
+   546→BEGIN
+   547→  NEW.updated_at := now();
+   548→  RETURN NEW;
+   549→END; $$ LANGUAGE plpgsql;
+   550→
+   551→-- Auto-audit for critical tables (orders, payments, document grants, profiles)
+   552→CREATE OR REPLACE FUNCTION audit.log_change() RETURNS trigger AS $$
+   553→DECLARE
+   554→  v_actor TEXT;
+   555→  v_entity TEXT;
+   556→  v_entity_id TEXT;
+   557→BEGIN
+   558→  v_entity   := TG_ARGV[0];
+   559→  v_actor    := NULLIF(current_setting('app.actor_id', true), '');
+   560→  v_entity_id := COALESCE(NEW.id, OLD.id);
+   561→  INSERT INTO audit.logs (id, actor_id, actor_type, action, entity, entity_id, detail)
+   562→  VALUES (
+   563→    'audit-' || replace(gen_random_uuid()::text, '-', ''),
+   564→    v_actor,
+   565→    CASE WHEN v_actor IS NULL THEN 'system'::portal.actor_type ELSE 'user'::portal.actor_type END,
+   566→    TG_ARGV[0] || '.' || TG_OP::text,
+   567→    v_entity,
+   568→    v_entity_id,
+   569→    jsonb_build_object('operation', TG_OP, 'new', to_jsonb(CASE WHEN TG_OP = 'DELETE' THEN NULL ELSE NEW END), 'old', to_jsonb(CASE WHEN TG_OP = 'UPDATE' THEN OLD END))
+   570→  );
+   571→  RETURN COALESCE(NEW, OLD);
+   572→END; $$ LANGUAGE plpgsql;
+   573→
+   574→DO $$
+   575→DECLARE t TEXT;
+   576→BEGIN
+   577→  FOREACH t IN ARRAY ARRAY[
+   578→    'users','organisations','investor_profiles','investor_criteria',
+   579→    'orders','payments','mandates','mandate_milestones',
+   580→    'document_grants','portfolio_positions','capital_calls',
+   581→    'scenarios','comparisons','enquiries','organisation_members'
+   582→  ]
+   583→  LOOP
+   584→    EXECUTE format('CREATE TRIGGER trg_%s_touch BEFORE UPDATE ON portal.%I
+   585→                   FOR EACH ROW EXECUTE FUNCTION portal.touch_updated_at()', t, t);
+   586→  END LOOP;
+   587→END; $$;
+   588→
+   589→CREATE TRIGGER trg_orders_audit    AFTER INSERT OR UPDATE OR DELETE ON portal.orders
+   590→  FOR EACH ROW EXECUTE FUNCTION audit.log_change('order');
+   591→CREATE TRIGGER trg_payments_audit AFTER INSERT OR UPDATE OR DELETE ON portal.payments
+   592→  FOR EACH ROW EXECUTE FUNCTION audit.log_change('payment');
+   593→CREATE TRIGGER trg_docgrants_audit AFTER INSERT OR DELETE ON portal.document_grants
+   594→  FOR EACH ROW EXECUTE FUNCTION audit.log_change('permission');
+   595→CREATE TRIGGER trg_profiles_audit AFTER UPDATE OF verification_status, kyc_status, access_tier, nda_accepted ON portal.investor_profiles
+   596→  FOR EACH ROW EXECUTE FUNCTION audit.log_change('profile');
+   597→
+   598→COMMIT;
+   599→

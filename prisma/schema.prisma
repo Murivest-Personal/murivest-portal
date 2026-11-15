@@ -48,9 +48,11 @@ model User {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
-  sessions  Session[]
-  authTokens AuthToken[]
-  profile   InvestorProfile?
+  sessions      Session[]
+  authTokens    AuthToken[]
+  profile       InvestorProfile?
+  securityEvents SecurityEvent[]
+  orgMemberships OrganisationMember[]
 
   @@index([role])
 }
@@ -93,6 +95,8 @@ model SecurityEvent {
   detail    String? // JSON-encoded details
   createdAt DateTime @default(now())
 
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+
   @@index([userId, createdAt])
 }
 
@@ -127,6 +131,7 @@ model OrganisationMember {
   createdAt      DateTime @default(now())
 
   organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([organisationId, userId])
 }
@@ -297,9 +302,17 @@ model Order {
   amountUsd      Float    @default(0)
   currency       String   @default("KES")
 
-  status         String   @default("pending") // pending | awaiting_payment | payment_confirmed | processing | ready | delivered | cancelled
+  status         String   @default("pending") // pending | awaiting_payment | payment_confirmed | processing | internal_review | ready | delivered | closed | cancelled
   paymentMethod  String? // mpesa | wire | card
   transactionId  String?
+
+  // Orders Engine (admin): fulfilment assignment, advisor attribution,
+  // priority, due date and secure-delivery document (Sanity id).
+  assignedToId       String?
+  advisorId          String? // revenue attribution
+  priority           String   @default("normal") // low | normal | high | urgent
+  dueAt              DateTime?
+  deliveryDocumentId String? // Sanity document id delivered into the data room
 
   // Fulfilment snapshot
   contactName     String?
@@ -313,13 +326,19 @@ model Order {
   cancelledAt       DateTime?
   cancellationReason String?
   deliveredAt       DateTime?
+  closedAt          DateTime?
 
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
   payments      Payment[]
+  statusEvents  OrderStatusEvent[]
+  revenueEvent  RevenueEvent?
+  refundAdjustments RefundAdjustment[]
 
   @@index([userId, createdAt])
   @@index([status])
+  @@index([assignedToId, status])
+  @@index([advisorId])
 }
 
 model Payment {
@@ -371,6 +390,11 @@ model Mandate {
   exclusions          Json?
 
   advisorId           String?
+  // Pipeline management (admin): stage, win probability, next action.
+  stage              String    @default("sourcing") // sourcing | qualification | matching | negotiation | closing | post_closing
+  probability        Int       @default(0) // 0-100
+  nextAction         String?
+  nextActionDue      DateTime?
   submittedAt         DateTime?
   activatedAt          DateTime?
   closedAt            DateTime?
@@ -557,6 +581,126 @@ model CapitalCall {
   position PortfolioPosition @relation(fields: [positionId], references: [id], onDelete: Cascade)
 
   @@index([positionId, status])
+}
+
+// ---------------------------------------------------------------------------
+// Admin Internal System (sql/004_admin_schema.sql)
+// ---------------------------------------------------------------------------
+
+model StaffProfile {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  adminRole String   @default("advisor") // super_admin | ops_lead | advisor | compliance | finance | content | analyst
+  title     String?
+  team      String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([adminRole, isActive])
+}
+
+model OrderStatusEvent {
+  id          String    @id @default(cuid())
+  orderId     String
+  fromStatus  String?
+  toStatus    String
+  changedById String?
+  note        String?
+  createdAt   DateTime  @default(now())
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId, createdAt])
+}
+
+model RevenueEvent {
+  id             String   @id @default(cuid())
+  orderId        String   @unique
+  grossKes       Float    @default(0)
+  grossUsd       Float    @default(0)
+  processingUsd  Float    @default(0) // payment processing cost estimate
+  refundUsd      Float    @default(0) // approved refunds, cumulative
+  netUsd         Float    @default(0) // gross - processing - refunds
+  recognisedAt   DateTime @default(now())
+  recognisedById String?
+  note           String?
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([recognisedAt])
+}
+
+model RefundAdjustment {
+  id            String    @id @default(cuid())
+  orderId       String
+  amountUsd     Float
+  amountKes     Float    @default(0)
+  reason        String
+  status        String    @default("proposed") // proposed | approved | rejected | applied
+  requestedById String
+  reviewedById  String?
+  reviewedAt    DateTime?
+  createdAt     DateTime  @default(now())
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@index([status])
+}
+
+model ComplianceReview {
+  id            String   @id @default(cuid())
+  subjectUserId String
+  reviewerId    String
+  decision      String // approved | rejected | escalated | note
+  notes         String?
+  riskFlags     Json? // [{flag, severity, note}]
+  detail        Json? // {before, after, actions}
+  createdAt     DateTime @default(now())
+
+  @@index([subjectUserId, createdAt])
+}
+
+model InternalNote {
+  id         String   @id @default(cuid())
+  entityType String // investor | order | mandate | opportunity | enquiry | organisation | compliance | content
+  entityId   String
+  authorId   String
+  body       String
+  visibility String   @default("staff") // staff | admins
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId, createdAt])
+}
+
+model ContentMeta {
+  id             String   @id @default(cuid())
+  contentType    String // opportunity | brief | document | report
+  sanityId       String
+  title          String?
+  tags           Json?
+  status         String   @default("live") // live | paused | archived
+  featured       Boolean  @default(false)
+  visibilityTier String   @default("tier_1") // governance override floor
+  notes          String?
+  updatedById    String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([contentType, sanityId])
+  @@index([contentType, status])
+}
+
+model SystemSetting {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  category    String   @default("general") // general | feature_flag | integration
+  value       Json?
+  description String?
+  updatedById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 }
 
 // ---------------------------------------------------------------------------

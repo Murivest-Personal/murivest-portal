@@ -10,6 +10,7 @@ import {NextResponse, type NextRequest} from 'next/server'
  */
 
 const PORTAL_PREFIX = '/portal'
+const ADMIN_PREFIX = '/admin'
 
 export function middleware(req: NextRequest) {
   const {pathname} = req.nextUrl
@@ -24,9 +25,24 @@ export function middleware(req: NextRequest) {
     }
   }
 
+  // Admin Internal System — first gate only (cookie presence). Full staff-role
+  // validation happens server-side in requireAdminPage()/requireAdminApi().
+  if (pathname === ADMIN_PREFIX || pathname.startsWith(`${ADMIN_PREFIX}/`) || pathname.startsWith('/api/admin')) {
+    const hasSession = req.cookies.has('mvr_session')
+    if (!hasSession) {
+      const url = req.nextUrl.clone()
+      if (pathname.startsWith('/api/')) {
+        return NextResponse.json({ok: false, error: 'Authentication required.'}, {status: 401})
+      }
+      url.pathname = '/'
+      url.search = '?auth=required'
+      return NextResponse.redirect(url)
+    }
+  }
+
   return NextResponse.next()
 }
 
 export const config = {
-  matcher: ['/portal', '/portal/:path*'],
+  matcher: ['/portal', '/portal/:path*', '/admin', '/admin/:path*', '/api/admin/:path*'],
 }

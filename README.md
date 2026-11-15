@@ -67,13 +67,29 @@ Two views of one model:
 psql "$DATABASE_URL" -f sql/001_schema.sql   # 27 tables + enums + triggers + audit capture
 psql "$DATABASE_URL" -f sql/002_rls.sql      # Row Level Security (investor isolation, advisor/admin roles)
 psql "$DATABASE_URL" -f sql/003_functions.sql # create_admin, purge_expired, most-viewed rollups
+psql "$DATABASE_URL" -f sql/004_admin_schema.sql # Admin Internal System tables + order/mandate columns
+psql "$DATABASE_URL" -f sql/005_admin_rls.sql    # Admin RBAC at the database level
 ```
+
+Admin system tables (`sql/004_admin_schema.sql`): `staff_profiles` (granular RBAC roles) · `order_status_events` (lifecycle history) · `revenue_events` (recognition ledger — one per order) · `refund_adjustments` (controlled refunds) · `compliance_reviews` (KYC/AML decisions with before/after snapshots) · `internal_notes` · `content_meta` (governance layer over Sanity content: visibility floor, tags, live/paused/archived) · `system_settings` (feature flags & integration values — never secrets). Orders gain `assigned_to_id · advisor_id · priority · due_at · delivery_document_id · closed_at` and the extended status set (`internal_review`, `closed`); mandates gain `stage · probability · next_action · next_action_due`.
 
 Tables cover every interaction: `users · sessions · auth_tokens · security_events · organisations · organisation_members · investor_profiles · investor_criteria · saved_opportunities · opportunity_views · saved_searches · scenarios · comparisons · orders · payments · mandates · mandate_milestones · enquiries · messages · notifications · document_grants · document_access_logs · document_requests · nda_agreements · portfolio_positions · capital_calls · audit.logs`.
 
 **RLS posture** (sql/002_rls.sql): investors see only their own rows; advisors see assigned investors plus fulfilment tables; admins see all; audit inserts from the app tier are always permitted. The trusted app sets `app.user_id` / `app.actor_role` per transaction (`withUserContext()` in `src/lib/db.ts`); Supabase deployments swap `portal.current_user_id()` to `auth.uid()`.
 
 To run the app itself on PostgreSQL, change `provider = "sqlite"` → `"postgresql"` in `prisma/schema.prisma` and point `DATABASE_URL` at the instance.
+
+## Admin Internal System (`/admin`)
+
+The operational backbone of the portal — a high-trust capital-operations platform for Murivest staff (not a generic CRM). Sign in with a staff account, then visit **/admin**.
+
+**Roles (RBAC — enforced server-side in `src/lib/admin/rbac.ts` AND at the DB level by sql/005_admin_rls.sql):** Super Administrator · Operations Lead · Advisor (assigned investors only) · Compliance/KYC · Finance/Revenue · Content/Research · Read-Only Analyst. Bootstrap: `node scripts/create-admin.mjs <email> <name> <password>` (first Super Admin) or `node scripts/create-staff.mjs <email> <name> <password> <role> [title]`; afterwards create staff from Settings → Staff & roles (audit-logged).
+
+**Modules** — Command Centre (Revenue Card + priority queues + activity feed + quick actions) · Investors & Organisations (verification, tiers, advisor assignment, freeze/escalate, full timeline) · Opportunities (Sanity inventory + tiered-visibility governance, tags, bulk archive/pause) · **Orders Engine** (pending → payment confirmed → in progress → internal review → ready → delivered → closed; payment verification, assignment, controlled refunds, automatic revenue recognition, delivery into the data room) · Mandates & pipeline (stage, win probability, weighted pipeline) · Documents/data-room control · Communications inbox · Compliance (KYC/AML queue, NDA tracking, tier progression, risk flags) · Market Intelligence CMS · Analytics suite (executive, investors, opportunities, orders, mandates, operational health — all with comparison periods) · **Finance & Revenue** (the full Revenue Card) · Settings & Security (staff/roles, feature flags, integrations, audit viewer, session monitor).
+
+**Revenue rules** (applied everywhere, always labelled): revenue is recognised on delivery + verified payment (one ledger row per order); cash collected is shown alongside recognised revenue; net = gross − processing costs (configurable fee schedule) − approved refunds; refunds flow propose → Finance review; advisor attribution = order advisor ?? investor's advisor of record. Weighted pipeline = midpoint of target allocation × probability (active USD mandates); forecasts use explicit, labelled conventions.
+
+**APIs**: `GET /api/admin/data?scope=…` (guarded reads), `POST /api/admin/action` (guarded writes — every action permission-checked and audit-logged), `GET /api/admin/export?dataset=orders|revenue|investors|mandates|opportunities|audit` (CSV for leadership/finance; the Revenue Card also prints to PDF).
 
 ## Sanity — the content source
 
