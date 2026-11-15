@@ -26,9 +26,11 @@ export async function GET(req: NextRequest) {
     await notify({
       userId,
       type: 'system',
+      event: 'security.verification_update',
       title: 'Email verified',
       body: 'Your email address is confirmed. Continue institutional onboarding to unlock confidential material.',
       link: '/portal/onboarding',
+      emailVars: {alertTitle: 'Email verified', alertDetail: 'Your email address is confirmed. Continue institutional onboarding to unlock confidential material.'},
     })
   }
 

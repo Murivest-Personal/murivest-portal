@@ -17,12 +17,6 @@ export default async function ProfilePage() {
   const org = profile?.organisationId
     ? await db.organisation.findUnique({where: {id: profile.organisationId}}).catch(() => null)
     : null
-  const prefs = (profile?.preferences as Record<string, boolean> | null) ?? {
-    notifyOrders: true,
-    notifyMatches: true,
-    notifyDocuments: true,
-    notifyMessages: true,
-  }
 
   return (
     <div>
@@ -112,12 +106,6 @@ export default async function ProfilePage() {
           totalCapacity: profile?.totalCapacity ?? null,
           capitalFloor: profile?.capitalFloor ?? null,
           capitalCeiling: profile?.capitalCeiling ?? null,
-        }}
-        prefs={{
-          notifyOrders: prefs.notifyOrders ?? true,
-          notifyMatches: prefs.notifyMatches ?? true,
-          notifyDocuments: prefs.notifyDocuments ?? true,
-          notifyMessages: prefs.notifyMessages ?? true,
         }}
       />
     </div>

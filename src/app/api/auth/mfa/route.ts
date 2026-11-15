@@ -90,7 +90,7 @@ export async function POST(req: NextRequest) {
     }
     await db.user.update({where: {id: ctx.user.id}, data: {mfaEnabled: false, mfaSecretEnc: null}})
     await securityEvent({userId: ctx.user.id, type: 'mfa_disabled', ...meta})
-    await notify({userId: ctx.user.id, type: 'security', title: 'Two-factor authentication disabled', body: 'MFA was disabled on your account. If you did not request this, contact us immediately.'})
+    await notify({userId: ctx.user.id, type: 'security', event: 'security.mfa_changed', title: 'Two-factor authentication disabled', body: 'MFA was disabled on your account. If you did not request this, contact us immediately.', emailVars: {alertTitle: 'Two-factor authentication disabled', alertDetail: 'MFA was disabled on your account. If you did not request this, contact us immediately.'}})
     return NextResponse.json({ok: true})
   }
 

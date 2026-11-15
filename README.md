@@ -91,6 +91,18 @@ The operational backbone of the portal — a high-trust capital-operations platf
 
 **APIs**: `GET /api/admin/data?scope=…` (guarded reads), `POST /api/admin/action` (guarded writes — every action permission-checked and audit-logged), `GET /api/admin/export?dataset=orders|revenue|investors|mandates|opportunities|audit` (CSV for leadership/finance; the Revenue Card also prints to PDF).
 
+## Notifications (multi-channel, both systems)
+
+In-app centre + toasts/modals, Web Push (desktop + installed PWA, via Service Worker + VAPID), and transactional email — driven by one dispatcher and a per-investor channel × category preference matrix (Profile & Preferences → Notifications, deep-linked from every email footer).
+
+- **Dispatcher** (`src/lib/notifications/dispatch.ts`): every material event funnels through `notifyUser()` — one notification row, per-channel fan-out honouring preferences / quiet hours / digest opt-in, a `NotificationDelivery` ledger row per attempt, and an audit entry. Payloads pushed or emailed are minimal and non-sensitive; confidential detail stays behind authentication.
+- **Channels & events** (`src/lib/notifications/events.ts`): 8 categories (documents, orders, opportunities, studio, mandates, messages, security, system) × 3 channels, with the fine-grained event catalog (order.delivered, security.new_device, …) driving priorities, email templates and modal-worthy moments.
+- **Real-time**: SSE at `/api/notifications/stream` feeds the toaster; the Service Worker (`public/sw.js`) receives push with the tab closed, mirrors into IndexedDB (offline notification centre), deep-links clicks and background-syncs read state.
+- **Email**: exact institutional templates ship in code (`src/lib/notifications/email-defaults.ts`; exported to `download/murivest-email-templates/`), over your own SMTP; admins manage overrides + version history in Admin → Notifications → Email templates. Digest batches: `POST /api/cron/digest` with `Authorization: Bearer $CRON_SECRET`.
+- **Admin operations** (`/admin/notifications`): delivery ledger with per-investor status, bounce/failure rates, manual redelivery, suppression overrides, controlled announcements (segments, fully audited; `broadcast.send` permission).
+- **Schema**: Prisma models in `prisma/schema.prisma`; production DDL + RLS in `sql/006_notifications_schema.sql` (also `download/murivest-notifications-schema.sql`).
+- **Push keys**: `node scripts/generate-vapid-keys.mjs --write` → `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` (mailto:) in env. Production must set `CRON_SECRET` for the digest endpoint.
+
 ## Sanity — the content source
 
 **All properties, orderable briefs, data-room documents and market intelligence are uploaded through Sanity.** The portal never fabricates content.

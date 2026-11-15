@@ -6,6 +6,7 @@ import {hashPassword, passwordPolicyError} from '@/lib/auth/password'
 import {fail, clientMeta} from '@/lib/api'
 import {requireAdminApi, isAdminResponse, orderTransitionAllowed, isValidAdminRole, type AdminContext, type Permission} from '@/lib/admin/rbac'
 import {recogniseRevenue, applyRefundToLedger} from '@/lib/admin/revenue'
+import {dispatchAnnouncement} from '@/lib/notifications/dispatch'
 
 /**
  * Admin write API — one guarded dispatcher for every mutation in the Admin
@@ -67,10 +68,10 @@ export async function POST(req: NextRequest) {
     await db.investorProfile.update({where: {userId}, data: data as never})
 
     if (data.accessTier && data.accessTier !== before.accessTier) {
-      await notify({userId, type: 'system', title: 'Access tier updated', body: `Your Murivest access tier is now ${(data.accessTier as string).replace('_', ' ')}. Sign in to review newly available material.`, link: '/portal'})
+      await notify({userId, type: 'system', event: 'security.tier_changed', title: 'Access tier updated', body: `Your Murivest access tier is now ${(data.accessTier as string).replace('_', ' ')}. Sign in to review newly available material.`, link: '/portal', emailVars: {alertTitle: 'Access tier updated', alertDetail: `Your Murivest access tier is now ${(data.accessTier as string).replace('_', ' ')}. Newly available material can be reviewed when you next sign in.`}})
     }
     if (data.kycStatus === 'approved' && before.kycStatus !== 'approved') {
-      await notify({userId, type: 'system', title: 'Verification approved', body: 'Your KYC verification is approved. Confidential opportunities and off-market material are now visible where permitted.', link: '/portal/discover'})
+      await notify({userId, type: 'system', event: 'security.verification_update', title: 'Verification approved', body: 'Your KYC verification is approved. Confidential opportunities and off-market material are now visible where permitted.', link: '/portal/discover', emailVars: {alertTitle: 'Verification approved', alertDetail: 'Your KYC verification is approved. Confidential opportunities and off-market material are now visible where permitted.'}})
     }
     await db.complianceReview.create({
       data: {
@@ -190,20 +191,37 @@ export async function POST(req: NextRequest) {
         if (!existing) {
           await db.documentGrant.create({data: {sanityDocumentId: docId, userId: order.userId, grantedById: actx.auth.user.id, permission: 'download'}})
         }
-        await notify({userId: order.userId, type: 'document', title: `Brief delivered — ${order.reference}`, body: `“${order.briefTitle}” has been delivered to your secure Document Room.`, link: '/portal/documents'})
       }
     }
 
     const statusLabel = status.replace(/_/g, ' ')
+    const event =
+      status === 'delivered' ? 'order.delivered'
+      : status === 'payment_confirmed' ? 'order.payment_confirmed'
+      : status === 'processing' ? 'order.in_progress'
+      : status === 'ready' ? 'order.ready'
+      : 'order.status_change'
     await notify({
       userId: order.userId,
       type: 'order_status',
+      event,
+      priority: ['delivered', 'ready', 'payment_confirmed'].includes(status) ? 'high' : 'normal',
       title: `Order ${order.reference} · ${statusLabel}`,
       body:
         status === 'delivered'
           ? `“${order.briefTitle}” has been delivered${order.format === 'hard_copy' ? ' by courier' : ' to your Document Room'}.`
           : `Your order “${order.briefTitle}” is now ${statusLabel}.`,
-      link: '/portal/orders',
+      link: status === 'delivered' ? '/portal/documents' : '/portal/orders',
+      dedupeKey: `order.${order.id}.${status}`,
+      emailVars: {
+        briefTitle: order.briefTitle,
+        orderRef: order.reference,
+        statusLabel: statusLabel.replace(/^\w/, (c) => c.toUpperCase()),
+        statusNote:
+          status === 'delivered'
+            ? 'The brief is in your secure Document Room, watermarked for your account.'
+            : `Your order “${order.briefTitle}” is now ${statusLabel}.`,
+      },
     })
     await audit({actorId: actx.auth.user.id, actorType: 'admin', action: 'admin.order_status', entity: 'order', entityId: orderId, detail: {from: order.status, to: status, note, deliveryDocumentId}, ...meta})
     return NextResponse.json({ok: true})
@@ -264,9 +282,9 @@ export async function POST(req: NextRequest) {
         await db.order.update({where: {id: order.id}, data: {status: 'payment_confirmed'}})
         await db.orderStatusEvent.create({data: {orderId: order.id, fromStatus: order.status, toStatus: 'payment_confirmed', changedById: actx.auth.user.id, note: 'Payment verified'}})
       }
-      await notify({userId: payment.userId, type: 'order_status', title: 'Payment confirmed', body: `Payment for ${payment.order.reference} is confirmed. Preparation of “${payment.order.briefTitle}” will now be scheduled.`, link: '/portal/orders'})
+      await notify({userId: payment.userId, type: 'order_status', event: 'order.payment_confirmed', title: 'Payment confirmed', body: `Payment for ${payment.order.reference} is confirmed. Preparation of “${payment.order.briefTitle}” will now be scheduled.`, link: '/portal/orders', emailVars: {briefTitle: payment.order.briefTitle, orderRef: payment.order.reference, statusLabel: 'Payment confirmed', statusNote: `Payment for ${payment.order.reference} is confirmed. Preparation of “${payment.order.briefTitle}” will now be scheduled.`}})
     } else {
-      await notify({userId: payment.userId, type: 'order_status', title: 'Payment could not be verified', body: `We could not verify the payment for ${payment.order.reference}. ${note || 'Please contact your advisor.'}`, link: '/portal/orders'})
+      await notify({userId: payment.userId, type: 'order_status', event: 'order.payment_issue', title: 'Payment could not be verified', body: `We could not verify the payment for ${payment.order.reference}. ${note || 'Please contact your advisor.'}`, link: '/portal/orders', emailVars: {briefTitle: payment.order.briefTitle, orderRef: payment.order.reference, statusLabel: 'Payment could not be verified', statusNote: `We could not verify the payment for ${payment.order.reference}. ${note || 'Please contact your advisor.'}`}})
     }
     await audit({actorId: actx.auth.user.id, actorType: 'admin', action: 'admin.payment_verified', entity: 'payment', entityId: paymentId, detail: {decision, note}, ...meta})
     return NextResponse.json({ok: true})
@@ -304,7 +322,7 @@ export async function POST(req: NextRequest) {
     await db.refundAdjustment.update({where: {id: refundId}, data: {status: decision === 'approved' ? 'approved' : 'rejected', reviewedById: actx.auth.user.id, reviewedAt: new Date()}})
     if (decision === 'approved') {
       await applyRefundToLedger(refund.orderId, refund.amountUsd)
-      await notify({userId: refund.order.userId, type: 'order_status', title: 'Refund approved', body: `A refund of $${refund.amountUsd.toLocaleString('en-GB')} has been approved for ${refund.order.reference}. ${refund.reason}`, link: '/portal/orders'})
+      await notify({userId: refund.order.userId, type: 'order_status', event: 'order.refund', title: 'Refund approved', body: `A refund of $${refund.amountUsd.toLocaleString('en-GB')} has been approved for ${refund.order.reference}. ${refund.reason}`, link: '/portal/orders', emailVars: {briefTitle: refund.order.briefTitle, orderRef: refund.order.reference, statusLabel: 'Refund approved', statusNote: `A refund of $${refund.amountUsd.toLocaleString('en-GB')} has been approved for ${refund.order.reference}. ${refund.reason}`}})
     }
     await audit({actorId: actx.auth.user.id, actorType: 'admin', action: `admin.refund_${decision}`, entity: 'order', entityId: refund.orderId, detail: {refundId, amountUsd: refund.amountUsd}, ...meta})
     return NextResponse.json({ok: true})
@@ -343,7 +361,7 @@ export async function POST(req: NextRequest) {
 
     await db.mandate.update({where: {id: mandateId}, data: data as never})
     if (data.status === 'active' && mandate.status !== 'active') {
-      await notify({userId: mandate.userId, type: 'mandate', title: `Mandate ${mandate.reference} activated`, body: 'Your acquisition mandate is live. Matching opportunities will be surfaced in Discover and communicated by your advisor.', link: '/portal/mandates'})
+      await notify({userId: mandate.userId, type: 'mandate', event: 'mandate.status', title: `Mandate ${mandate.reference} activated`, body: 'Your acquisition mandate is live. Matching opportunities will be surfaced in Discover and communicated by your advisor.', link: '/portal/mandates', emailVars: {mandateRef: mandate.reference, mandateTitle: mandate.title, mandateStatus: 'activated', mandateNote: 'Your acquisition mandate is live. Matching opportunities will be surfaced in Discover and communicated by your advisor.'}})
     }
     await audit({actorId: actx.auth.user.id, actorType: 'admin', action: 'admin.mandate_updated', entity: 'mandate', entityId: mandateId, detail: data, ...meta})
     return NextResponse.json({ok: true})
@@ -369,7 +387,8 @@ export async function POST(req: NextRequest) {
       await db.documentGrant.create({data: {sanityDocumentId, userId: userId || null, organisationId: organisationId || null, grantedById: actx.auth.user.id, permission: permission as never, expiresAt: expiresAt ? new Date(expiresAt) : null}})
     }
     if (userId) {
-      await notify({userId, type: 'document', title: 'Document access granted', body: 'A document has been shared with you in the secure Document Room.', link: '/portal/documents'})
+      const docTitle = str(p, 'title')
+      await notify({userId, type: 'document', event: 'document.granted', title: 'Document access granted', body: docTitle ? `“${docTitle}” has been shared with you in the secure Document Room.` : 'A document has been shared with you in the secure Document Room.', link: '/portal/documents', emailVars: {documentTitle: docTitle ?? 'A shared document', documentNote: ' with download permission'}})
     }
     await audit({actorId: actx.auth.user.id, actorType: 'admin', action: 'admin.document_granted', entity: 'document', entityId: sanityDocumentId, detail: {userId, organisationId, permission, expiresAt}, ...meta})
     return NextResponse.json({ok: true})
@@ -399,9 +418,9 @@ export async function POST(req: NextRequest) {
     if (!request) return fail('Request not found.', 404)
     await db.documentRequest.update({where: {id: requestId}, data: {status: status as never}})
     if (status === 'ready') {
-      await notify({userId: request.userId, type: 'document', title: 'Requested materials are ready', body: 'Your document request has been fulfilled — see the secure Document Room.', link: '/portal/documents'})
+      await notify({userId: request.userId, type: 'document', event: 'document.request_ready', title: 'Requested materials are ready', body: 'Your document request has been fulfilled — see the secure Document Room.', link: '/portal/documents', emailVars: {documentTitle: request.subject, documentNote: ' — your requested materials'}})
     } else if (status === 'declined') {
-      await notify({userId: request.userId, type: 'document', title: 'Document request update', body: 'Your document request could not be fulfilled at this time. Your advisor will explain the alternatives.', link: '/portal/documents'})
+      await notify({userId: request.userId, type: 'document', event: 'document.request_declined', title: 'Document request update', body: 'Your document request could not be fulfilled at this time. Your advisor will explain the alternatives.', link: '/portal/documents'})
     }
     await audit({actorId: actx.auth.user.id, actorType: 'admin', action: 'admin.doc_request_status', entity: 'document_request', entityId: requestId, detail: {status}, ...meta})
     return NextResponse.json({ok: true})
@@ -435,7 +454,7 @@ export async function POST(req: NextRequest) {
     if (existing) {
       await db.contentMeta.update({where: {id: existing.id}, data: data as never})
     } else {
-      await db.contentMeta.create({data: {contentType, sanityId, ...(data as never)}})
+      await db.contentMeta.create({data: {contentType, sanityId, ...((data ?? {}) as Record<string, unknown>) as never}})
     }
     await audit({actorId: actx.auth.user.id, actorType: 'admin', action: 'admin.content_meta_upserted', entity: contentType, entityId: sanityId, detail: data, ...meta})
     return NextResponse.json({ok: true})
@@ -461,7 +480,7 @@ export async function POST(req: NextRequest) {
       }
       count += 1
     }
-    await audit({actorId: actx.auth.user.id, actorType: 'admin', action: 'admin.content_bulk_status', entity: contentType, entityId: null, detail: {count, status, ids}, ...meta})
+    await audit({actorId: actx.auth.user.id, actorType: 'admin', action: 'admin.content_bulk_status', entity: contentType, entityId: undefined, detail: {count, status, ids}, ...meta})
     return NextResponse.json({ok: true, count})
   }
 
@@ -483,7 +502,7 @@ export async function POST(req: NextRequest) {
     }
     await db.message.create({data: {userId: thread.userId, senderType: 'advisor', senderId: actx.auth.user.id, enquiryId, body}})
     await db.enquiry.update({where: {id: enquiryId}, data: {status: 'responded'}})
-    await notify({userId: thread.userId, type: 'message', title: 'Reply from your Murivest advisor', body: body.slice(0, 120), link: '/portal/activity'})
+    await notify({userId: thread.userId, type: 'message', event: 'message.reply', title: 'Reply from your Murivest advisor', body: body.slice(0, 120), link: '/portal/activity', emailVars: {advisorName: actx.auth.user.fullName || 'Your Murivest advisor', messagePreview: body.slice(0, 160)}})
     await audit({actorId: actx.auth.user.id, actorType: 'admin', action: 'admin.message_replied', entity: 'enquiry', entityId: enquiryId, ...meta})
     return NextResponse.json({ok: true})
   }
@@ -533,16 +552,23 @@ export async function POST(req: NextRequest) {
     const link = str(p, 'link')
     if (!title || !body) return fail('title and body required.')
 
-    let where: Record<string, unknown> = {role: 'investor', status: 'active'}
-    if (audience === 'verified') where = {...where, profile: {verificationStatus: 'verified'}}
-    else if (audience.startsWith('tier_')) where = {...where, profile: {accessTier: audience}}
-
-    const investors = await db.user.findMany({where: where as never, select: {id: true}})
-    for (const inv of investors) {
-      await notify({userId: inv.id, type: 'system', title, body, link: link ?? '/portal'})
-    }
-    await audit({actorId: actx.auth.user.id, actorType: 'admin', action: 'admin.broadcast_sent', entity: 'notification', entityId: null, detail: {audience, title, recipients: investors.length}, ...meta})
-    return NextResponse.json({ok: true, recipients: investors.length})
+    // Broadcasts are controlled, audited announcements: every recipient gets
+    // an ordinary notification row (with announcement_id) and full channel
+    // fan-out through the dispatcher — the ledger records everything.
+    const result = await dispatchAnnouncement({
+      title,
+      body,
+      link: link ?? '/portal',
+      category: 'system',
+      priority: 'high',
+      audience: {
+        verifiedOnly: audience === 'verified',
+        tiers: audience.startsWith('tier_') ? [audience] : undefined,
+      },
+      createdById: actx.auth.user.id,
+    })
+    await audit({actorId: actx.auth.user.id, actorType: 'admin', action: 'admin.broadcast_sent', entity: 'announcement', entityId: result.announcementId, detail: {audience, title, recipients: result.recipients}, ...meta})
+    return NextResponse.json({ok: true, recipients: result.recipients, announcementId: result.announcementId})
   }
 
   // --------------------------------------------------------------------------

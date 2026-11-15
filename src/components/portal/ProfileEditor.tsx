@@ -2,7 +2,8 @@
 
 import {useState} from 'react'
 import {useRouter} from 'next/navigation'
-import {Loader2, Save} from 'lucide-react'
+import Link from 'next/link'
+import {ArrowRight, Bell, Loader2, Save} from 'lucide-react'
 import {CURRENCY_OPTIONS} from '@/lib/constants'
 import {cn} from '@/lib/utils'
 
@@ -22,17 +23,9 @@ export interface ProfileForm {
   capitalCeiling: number | null
 }
 
-export interface PrefsForm {
-  notifyOrders: boolean
-  notifyMatches: boolean
-  notifyDocuments: boolean
-  notifyMessages: boolean
-}
-
-export default function ProfileEditor({profile, prefs}: {profile: ProfileForm; prefs: PrefsForm}) {
+export default function ProfileEditor({profile}: {profile: ProfileForm}) {
   const router = useRouter()
   const [form, setForm] = useState(profile)
-  const [prefForm, setPrefForm] = useState(prefs)
   const [busy, setBusy] = useState(false)
   const [savedAt, setSavedAt] = useState('')
 
@@ -56,11 +49,6 @@ export default function ProfileEditor({profile, prefs}: {profile: ProfileForm; p
           phone: form.phone || null,
         }),
       })
-      await fetch('/api/profile', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(prefForm),
-      })
       setSavedAt(new Date().toLocaleTimeString('en-GB'))
       router.refresh()
     } catch {
@@ -69,8 +57,6 @@ export default function ProfileEditor({profile, prefs}: {profile: ProfileForm; p
       setBusy(false)
     }
   }
-
-  const toggle = (key: keyof PrefsForm) => setPrefForm((p) => ({...p, [key]: !p[key]}))
 
   return (
     <form onSubmit={save} className="space-y-8">
@@ -148,35 +134,16 @@ export default function ProfileEditor({profile, prefs}: {profile: ProfileForm; p
       </section>
 
       <section className="border border-border bg-card p-6">
-        <h3 className="mb-2 font-display text-lg text-primary">Communication preferences</h3>
-        <p className="mb-4 text-xs leading-relaxed text-muted-foreground">Intelligent, non-spammy signals only — each class maps to genuinely material events.</p>
-        <ul className="grid gap-3 sm:grid-cols-2">
-          {(
-            [
-              ['notifyOrders', 'Order & payment status', 'Preparation milestones, payment verification, delivery and tracking.'],
-              ['notifyMatches', 'New opportunity matches', 'High-signal matches against your criteria and saved searches.'],
-              ['notifyDocuments', 'Document & data-room events', 'Grants, fulfilment of requests, new filings.'],
-              ['notifyMessages', 'Advisor messages & enquiries', 'Replies from your Murivest advisor.'],
-            ] as const
-          ).map(([key, title, body]) => (
-            <li key={key}>
-              <button
-                type="button"
-                onClick={() => toggle(key)}
-                aria-pressed={prefForm[key]}
-                className={cn('flex w-full items-start gap-3 border p-4 text-left transition-colors', prefForm[key] ? 'border-gold bg-gold/5' : 'border-border hover:border-gold/50')}
-              >
-                <span className={cn('mt-0.5 inline-flex h-5 w-5 flex-shrink-0 items-center justify-center border text-[10px]', prefForm[key] ? 'border-gold bg-gold text-forest-deep' : 'border-border text-transparent')}>
-                  ✓
-                </span>
-                <span>
-                  <span className="block text-sm font-medium text-primary">{title}</span>
-                  <span className="mt-0.5 block text-xs text-muted-foreground">{body}</span>
-                </span>
-              </button>
-            </li>
-          ))}
-        </ul>
+        <h3 className="mb-2 font-display text-lg text-primary">Notifications</h3>
+        <p className="mb-4 text-xs leading-relaxed text-muted-foreground">
+          In-app, push and email signals — controlled per category and per channel, with quiet hours and an optional digest.
+        </p>
+        <Link
+          href="/portal/notifications"
+          className="inline-flex items-center gap-2 border border-border px-4 py-2.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-primary transition-colors hover:border-gold hover:text-gold"
+        >
+          <Bell className="h-3.5 w-3.5 text-gold" /> Notification settings <ArrowRight className="h-3.5 w-3.5" />
+        </Link>
       </section>
 
       <div className="flex items-center justify-end gap-4">

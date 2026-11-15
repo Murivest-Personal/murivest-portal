@@ -1,6 +1,6 @@
 'use client'
 
-import {useState} from 'react'
+import {useEffect, useState} from 'react'
 import Link from 'next/link'
 import {usePathname, useRouter} from 'next/navigation'
 import {
@@ -22,10 +22,13 @@ import {
   Bell,
 } from 'lucide-react'
 import {cn} from '@/lib/utils'
+import type {LucideIcon} from 'lucide-react'
 import NotificationBell from './NotificationBell'
+import NotificationToaster from './NotificationToaster'
+import {ensureServiceWorker} from '@/lib/client/push'
 
 /** The twelve primary modules, in the specification's order. */
-const NAV = [
+const NAV: {href: string; label: string; icon: LucideIcon; exact?: boolean}[] = [
   {href: '/portal', label: 'Overview', icon: LayoutDashboard, exact: true},
   {href: '/portal/discover', label: 'Discover', icon: Search},
   {href: '/portal/studio', label: 'Investment Studio', icon: Calculator},
@@ -38,7 +41,7 @@ const NAV = [
   {href: '/portal/activity', label: 'Activity & Comms', icon: MessagesSquare},
   {href: '/portal/profile', label: 'Profile & Preferences', icon: UserRound},
   {href: '/portal/security', label: 'Account & Security', icon: ShieldCheck},
-] as const
+]
 
 export interface PortalShellProps {
   firstName: string
@@ -53,6 +56,13 @@ export default function PortalShell({firstName, classification, tierLabel, email
   const pathname = usePathname()
   const router = useRouter()
   const [menuOpen, setMenuOpen] = useState(false)
+
+  // Register the Service Worker once per portal session — enables Web Push
+  // (desktop + installed PWA) and the offline notification cache. Degrades
+  // silently where unsupported.
+  useEffect(() => {
+    void ensureServiceWorker()
+  }, [])
 
   const closeMenu = () => setMenuOpen(false)
 
@@ -169,6 +179,8 @@ export default function PortalShell({firstName, classification, tierLabel, email
         </header>
 
         <main className="mx-auto w-full max-w-6xl flex-1 px-5 py-8 lg:px-8 lg:py-12">{children}</main>
+
+        <NotificationToaster />
 
         <footer className="mt-auto border-t border-border">
           <div className="mx-auto flex max-w-6xl flex-col gap-2 px-5 py-6 text-[10px] uppercase tracking-[0.16em] text-muted-foreground sm:flex-row sm:items-center sm:justify-between lg:px-8">

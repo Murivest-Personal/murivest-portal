@@ -39,9 +39,14 @@ export async function createSession(userId: string, req: Request) {
     await notify({
       userId,
       type: 'security',
+      event: 'security.new_device',
       title: 'New sign-in detected',
       body: `A new device (${device}) signed in to your Murivest workspace. If this was not you, revoke the session under Account & Security immediately.`,
       link: '/portal/security',
+      emailVars: {
+        alertTitle: 'New sign-in detected',
+        alertDetail: `A new device (${device}) signed in to your Murivest workspace. If this was not you, revoke the session under Account & Security immediately and contact us.`,
+      },
     })
   }
 

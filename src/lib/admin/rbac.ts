@@ -71,6 +71,8 @@ export type Permission =
   | 'security.view'
   | 'security.revoke'
   | 'broadcast.send'
+  | 'notifications.view'
+  | 'notifications.manage'
   | 'export.data'
 
 const ALL: Permission[] = [
@@ -88,7 +90,8 @@ const ALL: Permission[] = [
   'analytics.view','revenue.view','revenue.export',
   'settings.view','settings.manage','staff.manage',
   'audit.view','security.view','security.revoke',
-  'broadcast.send','export.data',
+  'broadcast.send','notifications.view','notifications.manage',
+  'export.data',
 ]
 
 const MATRIX: Record<AdminRole, Permission[]> = {
@@ -106,6 +109,7 @@ const MATRIX: Record<AdminRole, Permission[]> = {
     'compliance.view',
     'intelligence.view',
     'analytics.view','revenue.view',
+    'notifications.view','notifications.manage',
     'settings.view',
     'export.data',
   ],
@@ -119,6 +123,7 @@ const MATRIX: Record<AdminRole, Permission[]> = {
     'mandates.view','mandates.manage',
     'documents.view','documents.manage',
     'communications.view','communications.reply',
+    'notifications.view',
     'intelligence.view',
   ],
   compliance: [
@@ -128,6 +133,7 @@ const MATRIX: Record<AdminRole, Permission[]> = {
     'documents.view',
     'communications.view',
     'compliance.view','compliance.review',
+    'notifications.view',
     'audit.view','security.view','security.revoke',
     'export.data',
   ],

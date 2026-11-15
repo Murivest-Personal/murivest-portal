@@ -20,6 +20,7 @@ const NAV_DEFS: {href: string; label: string; icon: string; permission?: Permiss
   {href: '/admin/mandates', label: 'Mandates', icon: 'mandates', permission: 'mandates.view'},
   {href: '/admin/documents', label: 'Documents', icon: 'documents', permission: 'documents.view'},
   {href: '/admin/communications', label: 'Communications', icon: 'communications', permission: 'communications.view'},
+  {href: '/admin/notifications', label: 'Notifications', icon: 'notifications', permission: 'notifications.view'},
   {href: '/admin/compliance', label: 'Compliance', icon: 'compliance', permission: 'compliance.view'},
   {href: '/admin/intelligence', label: 'Intelligence', icon: 'intelligence', permission: 'intelligence.view'},
   {href: '/admin/analytics', label: 'Analytics', icon: 'analytics', permission: 'analytics.view'},

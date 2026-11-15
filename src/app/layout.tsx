@@ -57,7 +57,11 @@ export const metadata: Metadata = {
     description:
       "Private capital allocation workspace for UHNWIs, family offices and institutional investors.",
   },
-  icons: {icon: "/favicon.svg"},
+  icons: {
+    icon: "/favicon.svg",
+    apple: "/icons/icon-192.png",
+  },
+  manifest: "/manifest.webmanifest",
 };
 
 export const viewport: Viewport = {

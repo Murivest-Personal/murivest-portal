@@ -58,13 +58,15 @@ export async function POST(req: NextRequest) {
         await notify({
           userId,
           type: 'system',
+          event: 'security.tier_changed',
           title: 'Access tier updated',
           body: `Your Murivest access tier is now ${accessTier.replace('_', ' ')}. Sign in to review newly available material.`,
           link: '/portal',
+          emailVars: {alertTitle: 'Access tier updated', alertDetail: `Your Murivest access tier is now ${accessTier.replace('_', ' ')}. Newly available material can be reviewed when you next sign in.`},
         })
       }
       if (kycStatus === 'approved' && target.kycStatus !== 'approved') {
-        await notify({userId, type: 'system', title: 'Verification approved', body: 'Your KYC verification is approved. Confidential opportunities and off-market material are now visible where permitted.', link: '/portal/discover'})
+        await notify({userId, type: 'system', event: 'security.verification_update', title: 'Verification approved', body: 'Your KYC verification is approved. Confidential opportunities and off-market material are now visible where permitted.', link: '/portal/discover', emailVars: {alertTitle: 'Verification approved', alertDetail: 'Your KYC verification is approved. Confidential opportunities and off-market material are now visible where permitted.'}})
       }
       await audit({actorId: ctx.user.id, actorType: ctx.user.role as 'advisor' | 'admin', action: 'permission.changed', entity: 'profile', entityId: target.id, detail: {verificationStatus, kycStatus, accessTier, advisorId}, ...meta})
       return NextResponse.json({ok: true})
@@ -106,12 +108,25 @@ export async function POST(req: NextRequest) {
       await notify({
         userId: order.userId,
         type: 'order_status',
+        event:
+          status === 'delivered' ? 'order.delivered'
+          : status === 'processing' ? 'order.in_progress'
+          : status === 'ready' ? 'order.ready'
+          : 'order.status_change',
+        priority: ['delivered', 'ready'].includes(status) ? 'high' : 'normal',
         title: `Order ${order.reference} · ${statusLabel}`,
         body:
           status === 'delivered'
             ? `“${order.briefTitle}” has been delivered${order.format === 'hard_copy' ? ' by courier' : ' to your Document Room'}.`
             : `Your order “${order.briefTitle}” is now ${statusLabel}.`,
         link: '/portal/orders',
+        dedupeKey: `order.${order.id}.${status}`,
+        emailVars: {
+          briefTitle: order.briefTitle,
+          orderRef: order.reference,
+          statusLabel: statusLabel.replace(/^\w/, (c) => c.toUpperCase()),
+          statusNote: `Your order “${order.briefTitle}” is now ${statusLabel}.`,
+        },
       })
       await audit({actorId: ctx.user.id, actorType: ctx.user.role as 'advisor' | 'admin', action: 'order.status_changed', entity: 'order', entityId: orderId, detail: {status, trackingNumber}, ...meta})
       return NextResponse.json({ok: true})
@@ -131,9 +146,9 @@ export async function POST(req: NextRequest) {
       })
       if (decision === 'verified') {
         await db.order.update({where: {id: payment.orderId}, data: {status: 'processing'}})
-        await notify({userId: payment.userId, type: 'order_status', title: 'Payment confirmed', body: `Payment for ${payment.order.reference} is confirmed. Preparation of “${payment.order.briefTitle}” has begun.`, link: '/portal/orders'})
+        await notify({userId: payment.userId, type: 'order_status', event: 'order.payment_confirmed', title: 'Payment confirmed', body: `Payment for ${payment.order.reference} is confirmed. Preparation of “${payment.order.briefTitle}” has begun.`, link: '/portal/orders', emailVars: {briefTitle: payment.order.briefTitle, orderRef: payment.order.reference, statusLabel: 'Payment confirmed', statusNote: `Payment for ${payment.order.reference} is confirmed. Preparation of “${payment.order.briefTitle}” has begun.`}})
       } else {
-        await notify({userId: payment.userId, type: 'order_status', title: 'Payment could not be verified', body: `We could not verify the payment for ${payment.order.reference}. ${note || 'Please contact your advisor.'}`, link: '/portal/orders'})
+        await notify({userId: payment.userId, type: 'order_status', event: 'order.payment_issue', title: 'Payment could not be verified', body: `We could not verify the payment for ${payment.order.reference}. ${note || 'Please contact your advisor.'}`, link: '/portal/orders', emailVars: {briefTitle: payment.order.briefTitle, orderRef: payment.order.reference, statusLabel: 'Payment could not be verified', statusNote: `We could not verify the payment for ${payment.order.reference}. ${note || 'Please contact your advisor.'}`}})
       }
       await audit({actorId: ctx.user.id, actorType: ctx.user.role as 'advisor' | 'admin', action: 'payment.verified', entity: 'payment', entityId: paymentId, detail: {decision, note}, ...meta})
       return NextResponse.json({ok: true})
@@ -150,7 +165,7 @@ export async function POST(req: NextRequest) {
         data: {userId: thread.userId, senderType: 'advisor', senderId: ctx.user.id, enquiryId, body},
       })
       await db.enquiry.update({where: {id: enquiryId}, data: {status: 'responded'}})
-      await notify({userId: thread.userId, type: 'message', title: 'Reply from your Murivest advisor', body: body.slice(0, 120), link: '/portal/activity'})
+      await notify({userId: thread.userId, type: 'message', event: 'message.reply', title: 'Reply from your Murivest advisor', body: body.slice(0, 120), link: '/portal/activity', emailVars: {advisorName: ctx.user.fullName || 'Your Murivest advisor', messagePreview: body.slice(0, 160)}})
       await audit({actorId: ctx.user.id, actorType: ctx.user.role as 'advisor' | 'admin', action: 'message.replied', entity: 'enquiry', entityId: enquiryId, ...meta})
       return NextResponse.json({ok: true})
     }
@@ -173,7 +188,7 @@ export async function POST(req: NextRequest) {
         },
       })
       if (status === 'active') {
-        await notify({userId: mandate.userId, type: 'mandate', title: `Mandate ${mandate.reference} activated`, body: 'Your acquisition mandate is live. Opportunities matching it will be surfaced in Discover and communicated by your advisor.', link: '/portal/mandates'})
+        await notify({userId: mandate.userId, type: 'mandate', event: 'mandate.status', title: `Mandate ${mandate.reference} activated`, body: 'Your acquisition mandate is live. Opportunities matching it will be surfaced in Discover and communicated by your advisor.', link: '/portal/mandates', emailVars: {mandateRef: mandate.reference, mandateTitle: mandate.title, mandateStatus: 'activated', mandateNote: 'Your acquisition mandate is live. Opportunities matching it will be surfaced in Discover and communicated by your advisor.'}})
       }
       await audit({actorId: ctx.user.id, actorType: ctx.user.role as 'advisor' | 'admin', action: 'mandate.status_changed', entity: 'mandate', entityId: mandateId, detail: {status, advisorId}, ...meta})
       return NextResponse.json({ok: true})
@@ -195,7 +210,7 @@ export async function POST(req: NextRequest) {
           status: (status as never) || 'pending',
         },
       })
-      await notify({userId: mandate.userId, type: 'mandate', title: 'Mandate milestone added', body: `${title} was added to mandate ${mandate.reference}.`, link: '/portal/mandates'})
+      await notify({userId: mandate.userId, type: 'mandate', event: 'mandate.milestone', title: 'Mandate milestone added', body: `${title} was added to mandate ${mandate.reference}.`, link: '/portal/mandates'})
       await audit({actorId: ctx.user.id, actorType: ctx.user.role as 'advisor' | 'admin', action: 'mandate.milestone_added', entity: 'mandate', entityId: mandateId, detail: {title}, ...meta})
       return NextResponse.json({ok: true})
     }
@@ -219,7 +234,8 @@ export async function POST(req: NextRequest) {
         },
       })
       if (userId) {
-        await notify({userId, type: 'document', title: 'Document access granted', body: 'A document has been shared with you in the secure Document Room.', link: '/portal/documents'})
+        const docTitle = str('title')
+        await notify({userId, type: 'document', event: 'document.granted', title: 'Document access granted', body: docTitle ? `“${docTitle}” has been shared with you in the secure Document Room.` : 'A document has been shared with you in the secure Document Room.', link: '/portal/documents', emailVars: {documentTitle: docTitle ?? 'A shared document', documentNote: ''}})
       }
       await audit({actorId: ctx.user.id, actorType: ctx.user.role as 'advisor' | 'admin', action: 'permission.granted', entity: 'document', entityId: sanityDocumentId, detail: {userId, organisationId, permission}, ...meta})
       return NextResponse.json({ok: true})

@@ -60,24 +60,26 @@ function getTransporter(): Transporter {
   return cachedTransporter
 }
 
-export async function sendMail(message: MailMessage): Promise<{delivered: boolean; devLink?: string}> {
+export async function sendMail(message: MailMessage): Promise<{delivered: boolean; messageId?: string; error?: string; bounced?: boolean; devLink?: string}> {
   if (!smtpConfigured()) {
     console.info(`[mail:not-configured] to=${message.to} subject="${message.subject}"\n${message.text}`)
     return {delivered: false, devLink: devLinkFrom(message.text)}
   }
   try {
     const transporter = getTransporter()
-    await transporter.sendMail({
+    const info = await transporter.sendMail({
       from: FROM,
       to: message.to,
       subject: message.subject,
       text: message.text,
       html: message.html,
     })
-    return {delivered: true}
+    return {delivered: true, messageId: info.messageId}
   } catch (err) {
-    console.error('[mail:error]', err instanceof Error ? err.message : err)
-    return {delivered: false}
+    const error = err instanceof Error ? err.message : String(err)
+    const bounced = /bounced|recipient address rejected|user unknown|no such user|550|551|553/i.test(error)
+    console.error('[mail:error]', error)
+    return {delivered: false, error: error.slice(0, 300), ...(bounced ? {bounced: true} : {})}
   }
 }
 

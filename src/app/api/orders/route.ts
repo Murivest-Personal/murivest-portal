@@ -66,11 +66,21 @@ export async function POST(req: NextRequest) {
   await notify({
     userId: ctx.user.id,
     type: 'order_status',
+    event: 'order.received',
     title: payable ? 'Order placed — payment pending' : 'Order placed',
     body: payable
       ? `Order ${order.reference} for “${order.briefTitle}” is reserved. Complete payment to begin preparation.`
       : `Your request for “${order.briefTitle}” (${order.reference}) is with our research desk. You will be notified when it is ready in your Document Room.`,
     link: '/portal/orders',
+    dedupeKey: `order.received.${order.id}`,
+    emailVars: {
+      briefTitle: order.briefTitle,
+      orderRef: order.reference,
+      orderScope: order.briefType === 'custom' && order.customScope ? ` — scope: ${order.customScope.slice(0, 120)}` : '',
+      amountLine: payable
+        ? `Amount due: ${order.currency} ${(order.currency === 'KES' ? order.amountKes : order.amountUsd).toLocaleString('en-GB')}.`
+        : 'No payment is required for this request.',
+    },
   })
   await audit({
     actorId: ctx.user.id,
