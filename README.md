@@ -61,14 +61,15 @@ scripts/create-admin.mjs    First-run administrator bootstrap
 Two views of one model:
 
 - **Runtime (dev/sandbox)**: Prisma + SQLite (`prisma/schema.prisma`). `bun run db:push` keeps it in sync.
-- **Production**: PostgreSQL DDL in `sql/`:
+- **Production**: PostgreSQL DDL in `sql/`, applied over the **migration connection** (`$DIRECT_URL` — session pooler or direct host), never the runtime pooler:
 
 ```bash
-psql "$DATABASE_URL" -f sql/001_schema.sql   # 27 tables + enums + triggers + audit capture
-psql "$DATABASE_URL" -f sql/002_rls.sql      # Row Level Security (investor isolation, advisor/admin roles)
-psql "$DATABASE_URL" -f sql/003_functions.sql # create_admin, purge_expired, most-viewed rollups
-psql "$DATABASE_URL" -f sql/004_admin_schema.sql # Admin Internal System tables + order/mandate columns
-psql "$DATABASE_URL" -f sql/005_admin_rls.sql    # Admin RBAC at the database level
+psql "$DIRECT_URL" -f sql/001_schema.sql    # 27 tables + enums + triggers + audit capture
+psql "$DIRECT_URL" -f sql/002_rls.sql       # Row Level Security (investor isolation, advisor/admin roles)
+psql "$DIRECT_URL" -f sql/003_functions.sql # create_admin, purge_expired, most-viewed rollups
+psql "$DIRECT_URL" -f sql/004_admin_schema.sql # Admin Internal System tables + order/mandate columns
+psql "$DIRECT_URL" -f sql/005_admin_rls.sql    # Admin RBAC at the database level
+psql "$DIRECT_URL" -f sql/006_notifications_schema.sql # Notifications (deliveries, prefs, push, templates)
 ```
 
 Admin system tables (`sql/004_admin_schema.sql`): `staff_profiles` (granular RBAC roles) · `order_status_events` (lifecycle history) · `revenue_events` (recognition ledger — one per order) · `refund_adjustments` (controlled refunds) · `compliance_reviews` (KYC/AML decisions with before/after snapshots) · `internal_notes` · `content_meta` (governance layer over Sanity content: visibility floor, tags, live/paused/archived) · `system_settings` (feature flags & integration values — never secrets). Orders gain `assigned_to_id · advisor_id · priority · due_at · delivery_document_id · closed_at` and the extended status set (`internal_review`, `closed`); mandates gain `stage · probability · next_action · next_action_due`.
@@ -77,7 +78,29 @@ Tables cover every interaction: `users · sessions · auth_tokens · security_ev
 
 **RLS posture** (sql/002_rls.sql): investors see only their own rows; advisors see assigned investors plus fulfilment tables; admins see all; audit inserts from the app tier are always permitted. The trusted app sets `app.user_id` / `app.actor_role` per transaction (`withUserContext()` in `src/lib/db.ts`); Supabase deployments swap `portal.current_user_id()` to `auth.uid()`.
 
-To run the app itself on PostgreSQL, change `provider = "sqlite"` → `"postgresql"` in `prisma/schema.prisma` and point `DATABASE_URL` at the instance.
+### Production on Supabase — Supavisor pooling (required)
+
+The app runtime NEVER connects to the direct `db.<project-ref>.supabase.co` host — it is IPv6-only (unreachable from IPv4-only hosts), bypasses pooling and burns the connection budget. Per Supabase's guidance for Prisma at runtime, use the **Supavisor transaction pooler on port 6543**:
+
+```
+DATABASE_URL="postgresql://postgres.<project-ref>:<password>@aws-0-<region>.pooler.supabase.com:6543/postgres?pgbouncer=true&connection_limit=1"
+DIRECT_URL="postgresql://postgres.<project-ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres"
+```
+
+- **`DATABASE_URL` — runtime (transaction pooler, :6543).** `pgbouncer=true` is required: transaction mode has no prepared statements, so Prisma disables them (the interactive transactions used by `withUserContext()` keep working). Keep `connection_limit=1` for serverless / auto-scaling deployments; a single dedicated server may use 5–10.
+- **`DIRECT_URL` — CLI only (session pooler, :5432).** Used by `prisma db push` / `prisma migrate` and `psql` for the DDL above. With IPv6 or the IPv4 add-on the direct host `db.<project-ref>.supabase.co:5432` (username `postgres`) also works — but only here, never for the runtime.
+- Copy both strings verbatim from **Supabase Dashboard → Connect** (Transaction pooler / Session pooler); the username is `postgres.<project-ref>` on both poolers.
+- When deploying, switch the prisma datasource accordingly (the exact block is also in the `prisma/schema.prisma` header):
+
+```prisma
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")   // runtime — Supavisor transaction pooler (:6543)
+  directUrl = env("DIRECT_URL")     // migrations & db push — session pooler (:5432) / direct
+}
+```
+
+`src/lib/db.ts` warns at boot if `DATABASE_URL` still points at the direct `db.*` host. On non-Supabase Postgres, set both variables to the same direct connection string (`pgbouncer=true` is only needed behind a transaction pooler).
 
 ## Admin Internal System (`/admin`)
 
@@ -159,6 +182,8 @@ bun run db:push                   # dev runtime schema
 node scripts/create-admin.mjs office@murivest.com 'Full Name' 'Passw0rd!'   # first admin
 bun run dev                       # dev server
 ```
+
+Production runtime (`bun run start`, standalone server) — export the environment before starting: `DATABASE_URL` (Supavisor **transaction pooler :6543** — see *Database* above), `DIRECT_URL`, `SESSION_SECRET` / `APP_ENCRYPTION_KEY`, `SANITY_*`, `SMTP_*`, `VAPID_*`, `CRON_SECRET`. `NEXT_PUBLIC_*` values are inlined at build time — set them before `next build`. See `.env.example` for the full annotated template.
 
 Staff desk operations (verification, tier assignment, order/payment progression, advisor replies, mandate activation, document grants) run through the guarded, audit-logged `POST /api/staff` dispatcher — integrate with existing Murivest fulfilment workflows, or call from internal tooling as an admin/advisor session.
 

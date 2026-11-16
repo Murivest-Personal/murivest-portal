@@ -1,0 +1,864 @@
+     1→// =====================================================================
+     2→// Murivest Private Capital Portal — Prisma Schema
+     3→// ---------------------------------------------------------------------
+     4→// Runtime schema for the Next.js application. The sandbox/dev runtime
+     5→// uses SQLite. For production, switch the provider to "postgresql"
+     6→// and point DATABASE_URL at your managed instance, then run
+     7→// `prisma db push` (or apply sql/001_schema.sql + 002_rls.sql first).
+     8→//
+     9→// NOTE (SQLite runtime): enums are not supported by the SQLite
+    10→// connector, so constrained fields are declared as String and enforced
+    11→// at the application layer (zod schemas in src/lib/validation.ts).
+    12→// The production PostgreSQL DDL (sql/001_schema.sql) declares the
+    13→// same constraints as native ENUM / CHECK constraints.
+    14→//
+    15→// Content objects (opportunities, briefs, data-room documents, market
+    16→// intelligence reports, landing content) are authored in Sanity and
+    17→// fetched with GROQ — they are NOT duplicated here. Local tables track
+    18→// every *interaction* with that content (saves, views, grants, access
+    19→// logs, orders) keyed by the Sanity document id.
+    20→// =====================================================================
+    21→
+    22→generator client {
+    23→  provider = "prisma-client-js"
+    24→}
+    25→
+    26→datasource db {
+    27→  provider = "sqlite"
+    28→  url      = env("DATABASE_URL")
+    29→}
+    30→
+    31→// ---------------------------------------------------------------------------
+    32→// Authentication & identity
+    33→// ---------------------------------------------------------------------------
+    34→
+    35→model User {
+    36→  id            String    @id @default(cuid())
+    37→  email         String    @unique
+    38→  passwordHash  String? // null => magic-link / SSO-only account
+    39→  fullName      String?
+    40→  role          String    @default("investor") // investor | advisor | admin
+    41→  status        String    @default("active") // active | suspended | locked
+    42→  emailVerifiedAt DateTime?
+    43→  mfaEnabled    Boolean   @default(false)
+    44→  mfaSecretEnc  String? // AES-256-GCM encrypted TOTP secret
+    45→  lastLoginAt   DateTime?
+    46→  failedLogins  Int       @default(0)
+    47→  lockedUntil   DateTime?
+    48→  createdAt     DateTime  @default(now())
+    49→  updatedAt     DateTime  @updatedAt
+    50→
+    51→  sessions      Session[]
+    52→  authTokens    AuthToken[]
+    53→  profile       InvestorProfile?
+    54→  securityEvents SecurityEvent[]
+    55→  orgMemberships OrganisationMember[]
+    56→
+    57→  @@index([role])
+    58→}
+    59→
+    60→model Session {
+    61→  id         String    @id @default(cuid())
+    62→  userId     String
+    63→  tokenHash  String    @unique // sha-256 of the opaque cookie token
+    64→  userAgent  String?
+    65→  ip         String?
+    66→  device     String? // derived friendly device label
+    67→  createdAt  DateTime  @default(now())
+    68→  lastSeenAt DateTime  @default(now())
+    69→  expiresAt  DateTime
+    70→  revokedAt  DateTime?
+    71→  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+    72→
+    73→  @@index([userId, lastSeenAt])
+    74→}
+    75→
+    76→model AuthToken {
+    77→  id        String    @id @default(cuid())
+    78→  userId    String
+    79→  tokenHash String    @unique // sha-256 of the emailed link token
+    80→  purpose   String // email_verify | magic_link | password_reset
+    81→  expiresAt DateTime
+    82→  usedAt    DateTime?
+    83→  createdAt DateTime  @default(now())
+    84→  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+    85→
+    86→  @@index([userId, purpose])
+    87→}
+    88→
+    89→model SecurityEvent {
+    90→  id        String   @id @default(cuid())
+    91→  userId    String?
+    92→  type      String // login | login_failed | logout | new_device | mfa_enabled | mfa_disabled | password_changed | session_revoked | account_locked
+    93→  ip        String?
+    94→  userAgent String?
+    95→  detail    String? // JSON-encoded details
+    96→  createdAt DateTime @default(now())
+    97→
+    98→  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+    99→
+   100→  @@index([userId, createdAt])
+   101→}
+   102→
+   103→// ---------------------------------------------------------------------------
+   104→// Organisations (institutional representatives)
+   105→// ---------------------------------------------------------------------------
+   106→
+   107→model Organisation {
+   108→  id          String   @id @default(cuid())
+   109→  name        String
+   110→  legalName   String?
+   111→  type        String   @default("institution") // family_office | fund | corporate | endowment | pension | other
+   112→  country     String?
+   113→  website     String?
+   114→  verified    Boolean  @default(false)
+   115→  createdById String
+   116→  createdAt   DateTime @default(now())
+   117→  updatedAt   DateTime @updatedAt
+   118→
+   119→  members OrganisationMember[]
+   120→
+   121→  @@unique([name, type])
+   122→}
+   123→
+   124→model OrganisationMember {
+   125→  id             String   @id @default(cuid())
+   126→  organisationId String
+   127→  userId         String
+   128→  role           String   @default("member") // admin | member | analyst
+   129→  title          String?
+   130→  status         String   @default("invited") // invited | active | removed
+   131→  createdAt      DateTime @default(now())
+   132→
+   133→  organisation Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+   134→  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+   135→
+   136→  @@unique([organisationId, userId])
+   137→}
+   138→
+   139→// ---------------------------------------------------------------------------
+   140→// Investor profile, verification pipeline & preferences
+   141→// ---------------------------------------------------------------------------
+   142→
+   143→model InvestorProfile {
+   144→  id               String    @id @default(cuid())
+   145→  userId           String    @unique
+   146→  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+   147→  classification   String    @default("individual") // individual | uhnwi | institutional_rep
+   148→  organisationId   String? // for institutional representatives
+   149→  jobTitle         String?
+   150→  nationality      String?
+   151→  countryResidence String?
+   152→  phone            String?
+   153→
+   154→  // Deployment capacity (stated, self-reported; verified during KYC)
+   155→  capitalCurrency  String    @default("USD") // USD | KES | GBP | EUR
+   156→  equityAvailable  Float?
+   157→  totalCapacity    Float?
+   158→  capitalFloor     Float? // typical single-ticket size
+   159→  capitalCeiling   Float?
+   160→
+   161→  // Progressive verification pipeline
+   162→  verificationStatus String  @default("unverified") // unverified | email_verified | profile_submitted | kyc_pending | in_review | verified | rejected
+   163→  kycStatus        String    @default("not_started") // not_started | submitted | in_review | approved | rejected
+   164→  amlStatus        String    @default("not_started") // not_started | clear | flagged
+   165→  accessTier       String    @default("tier_1") // tier_1 | tier_2 | tier_3
+   166→  ndaAccepted      Boolean   @default(false)
+   167→  onboardingStep   Int       @default(1) // last completed wizard step
+   168→  advisorId        String? // assigned Murivest advisor (User.role = advisor)
+   169→  source           String?
+   170→  notes            String?
+   171→  preferences      Json? // communication preferences: {notifyOrders, notifyMatches, notifyDocuments, notifyMessages}
+   172→
+   173→  createdAt        DateTime  @default(now())
+   174→  updatedAt        DateTime  @updatedAt
+   175→
+   176→  @@index([verificationStatus])
+   177→}
+   178→
+   179→model InvestorCriteria {
+   180→  id        String   @id @default(cuid())
+   181→  userId    String   @unique // one live criteria set per investor
+   182→  currency  String   @default("USD")
+   183→
+   184→  // Capital
+   185→  equityAvailable Float? // deployable equity today
+   186→  totalCapacity   Float? // programme-level capacity
+   187→  minTicket       Float?
+   188→  maxTicket       Float?
+   189→
+   190→  // Where & what
+   191→  geographies Json? // [{ country, city, markets: [] }]
+   192→  assetClasses Json? // ["office","industrial","retail","hospitality","mixed_use","land"]
+   193→  structures  Json? // ["direct","joint_venture","preferred_equity","debt"]
+   194→
+   195→  // Return targets
+   196→  minGrossYield     Float?
+   197→  minNetYield      Float?
+   198→  targetIrr        Float?
+   199→  targetCashOnCash Float?
+   200→  targetPaybackYears Float?
+   201→
+   202→  // Hold & leverage
+   203→  holdPeriodMin Float? // years
+   204→  holdPeriodMax Float?
+   205→  leverageComfort Float? // max acceptable LTV %
+   206→  financingOpen  Boolean @default(true)
+   207→
+   208→  // Risk & exits
+   209→  riskTolerance String? // conservative | balanced | opportunistic | distressed
+   210→  exitPreferences Json? // ["hold_for_income","timed_sale","value_add_exit","refinance"]
+   211→
+   212→  currencyNote String?
+   213→  createdAt    DateTime @default(now())
+   214→  updatedAt    DateTime @updatedAt
+   215→}
+   216→
+   217→// ---------------------------------------------------------------------------
+   218→// Interaction with Sanity-sourced opportunities
+   219→// ---------------------------------------------------------------------------
+   220→
+   221→model SavedOpportunity {
+   222→  id        String   @id @default(cuid())
+   223→  userId    String
+   224→  sanityId  String // Sanity opportunity document id
+   225→  note      String?
+   226→  createdAt DateTime @default(now())
+   227→
+   228→  @@unique([userId, sanityId])
+   229→  @@index([userId, createdAt])
+   230→}
+   231→
+   232→model OpportunityView {
+   233→  id       String   @id @default(cuid())
+   234→  userId   String
+   235→  sanityId String
+   236→  viewedAt DateTime @default(now())
+   237→
+   238→  @@index([sanityId, viewedAt])
+   239→  @@index([userId, viewedAt])
+   240→}
+   241→
+   242→model SavedSearch {
+   243→  id          String    @id @default(cuid())
+   244→  userId      String
+   245→  name        String
+   246→  filters     Json // Discover filter payload
+   247→  alertOnNew  Boolean   @default(false)
+   248→  lastAlertAt DateTime?
+   249→  createdAt   DateTime  @default(now())
+   250→
+   251→  @@index([userId])
+   252→}
+   253→
+   254→// ---------------------------------------------------------------------------
+   255→// Investment Studio (scenarios, comparisons)
+   256→// ---------------------------------------------------------------------------
+   257→
+   258→model Scenario {
+   259→  id                  String   @id @default(cuid())
+   260→  userId              String
+   261→  name                String
+   262→  sanityOpportunityId String? // modelled opportunity (optional)
+   263→  opportunityTitle    String? // denormalised snapshot
+   264→  inputs             Json // full transparent assumption set
+   265→  summary            Json // computed metrics snapshot at save time
+   266→  notes              String?
+   267→  createdAt           DateTime @default(now())
+   268→  updatedAt           DateTime @updatedAt
+   269→
+   270→  @@index([userId, updatedAt])
+   271→}
+   272→
+   273→model Comparison {
+   274→  id          String   @id @default(cuid())
+   275→  userId      String
+   276→  name        String
+   277→  sanityIds   Json // opportunity ids compared
+   278→  scenarioIds Json // studio scenario ids included
+   279→  snapshot    Json // captured metrics for offline review
+   280→  createdAt   DateTime @default(now())
+   281→  updatedAt   DateTime @updatedAt
+   282→
+   283→  @@index([userId, updatedAt])
+   284→}
+   285→
+   286→// ---------------------------------------------------------------------------
+   287→// Orders — private & institutional briefs
+   288→// ---------------------------------------------------------------------------
+   289→
+   290→model Order {
+   291→  id             String   @id @default(cuid())
+   292→  reference      String   @unique // human reference e.g. MVR-ORD-7F3K2Q
+   293→  userId         String
+   294→  briefSource    String   @default("catalog") // catalog | auction | off_market | custom
+   295→  sanityBriefId  String? // Sanity brief document id (null for custom requests)
+   296→  sanityOpportunityId String? // opportunity the brief relates to (optional)
+   297→  briefTitle     String // snapshot of title at order time
+   298→  briefType      String   @default("private_brief") // private_brief | institutional_brief | custom
+   299→  format         String   @default("digital") // digital | hard_copy
+   300→  customScope    String? // requested scope for custom briefs
+   301→  amountKes      Float    @default(0)
+   302→  amountUsd      Float    @default(0)
+   303→  currency       String   @default("KES")
+   304→
+   305→  status         String   @default("pending") // pending | awaiting_payment | payment_confirmed | processing | internal_review | ready | delivered | closed | cancelled
+   306→  paymentMethod  String? // mpesa | wire | card
+   307→  transactionId  String?
+   308→
+   309→  // Orders Engine (admin): fulfilment assignment, advisor attribution,
+   310→  // priority, due date and secure-delivery document (Sanity id).
+   311→  assignedToId       String?
+   312→  advisorId          String? // revenue attribution
+   313→  priority           String   @default("normal") // low | normal | high | urgent
+   314→  dueAt              DateTime?
+   315→  deliveryDocumentId String? // Sanity document id delivered into the data room
+   316→
+   317→  // Fulfilment snapshot
+   318→  contactName     String?
+   319→  contactEmail    String?
+   320→  organisation    String?
+   321→  shippingAddress String?
+   322→  phone           String?
+   323→  deliveryMethod  String? // secure_download | courier
+   324→  trackingNumber  String?
+   325→
+   326→  cancelledAt       DateTime?
+   327→  cancellationReason String?
+   328→  deliveredAt       DateTime?
+   329→  closedAt          DateTime?
+   330→
+   331→  createdAt      DateTime  @default(now())
+   332→  updatedAt      DateTime  @updatedAt
+   333→  payments      Payment[]
+   334→  statusEvents  OrderStatusEvent[]
+   335→  revenueEvent  RevenueEvent?
+   336→  refundAdjustments RefundAdjustment[]
+   337→
+   338→  @@index([userId, createdAt])
+   339→  @@index([status])
+   340→  @@index([assignedToId, status])
+   341→  @@index([advisorId])
+   342→}
+   343→
+   344→model Payment {
+   345→  id              String   @id @default(cuid())
+   346→  orderId         String
+   347→  userId          String
+   348→  method          String // mpesa | wire | card
+   349→  amountKes      Float    @default(0)
+   350→  amountUsd      Float    @default(0)
+   351→  currency       String   @default("KES")
+   352→  reference      String? // transaction / confirmation code
+   353→  confirmationRaw String? // pasted M-Pesa confirmation message (for manual verification)
+   354→  status         String   @default("submitted") // submitted | verified | rejected | failed
+   355→  verifiedById   String? // advisor/admin who verified
+   356→  verifiedAt     DateTime?
+   357→  note           String?
+   358→  createdAt      DateTime @default(now())
+   359→
+   360→  order           Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+   361→
+   362→  @@index([orderId])
+   363→  @@index([status])
+   364→}
+   365→
+   366→// ---------------------------------------------------------------------------
+   367→// Mandates
+   368→// ---------------------------------------------------------------------------
+   369→
+   370→model Mandate {
+   371→  id                  String    @id @default(cuid())
+   372→  reference           String    @unique // MVR-MND-XXXXXX
+   373→  userId              String
+   374→  title               String
+   375→  status              String    @default("draft") // draft | submitted | active | paused | closed | rejected
+   376→  description         String?
+   377→
+   378→  targetAllocationMin Float?
+   379→  targetAllocationMax Float?
+   380→  currency            String    @default("USD")
+   381→  geographies         Json?
+   382→  assetClasses        Json?
+   383→  structures          Json?
+   384→  minNetYield         Float?
+   385→  targetIrr           Float?
+   386→  holdPeriodMin       Float?
+   387→  holdPeriodMax       Float?
+   388→  leverageComfort     Float?
+   389→  riskMandate         String? // conservative | balanced | opportunistic
+   390→  exclusions          Json?
+   391→
+   392→  advisorId           String?
+   393→  // Pipeline management (admin): stage, win probability, next action.
+   394→  stage              String    @default("sourcing") // sourcing | qualification | matching | negotiation | closing | post_closing
+   395→  probability        Int       @default(0) // 0-100
+   396→  nextAction         String?
+   397→  nextActionDue      DateTime?
+   398→  submittedAt         DateTime?
+   399→  activatedAt          DateTime?
+   400→  closedAt            DateTime?
+   401→  createdAt           DateTime  @default(now())
+   402→  updatedAt           DateTime  @updatedAt
+   403→
+   404→  milestones MandateMilestone[]
+   405→
+   406→  @@index([userId, status])
+   407→}
+   408→
+   409→model MandateMilestone {
+   410→  id          String    @id @default(cuid())
+   411→  mandateId   String
+   412→  title       String
+   413→  detail      String?
+   414→  dueDate     DateTime?
+   415→  status      String    @default("pending") // pending | in_progress | done | blocked
+   416→  completedAt DateTime?
+   417→  createdAt   DateTime  @default(now())
+   418→
+   419→  mandate Mandate @relation(fields: [mandateId], references: [id], onDelete: Cascade)
+   420→
+   421→  @@index([mandateId])
+   422→}
+   423→
+   424→// ---------------------------------------------------------------------------
+   425→// Activity & communications
+   426→// ---------------------------------------------------------------------------
+   427→
+   428→model Enquiry {
+   429→  id                  String   @id @default(cuid())
+   430→  userId              String
+   431→  subject             String
+   432→  message             String
+   433→  sanityOpportunityId String? // context opportunity
+   434→  opportunityTitle    String?
+   435→  status              String   @default("open") // open | responded | closed
+   436→  createdAt           DateTime @default(now())
+   437→  updatedAt           DateTime @updatedAt
+   438→
+   439→  messages Message[]
+   440→
+   441→  @@index([userId, createdAt])
+   442→}
+   443→
+   444→model Message {
+   445→  id         String    @id @default(cuid())
+   446→  userId     String // investor thread owner
+   447→  senderType String    @default("investor") // investor | advisor | system
+   448→  senderId   String? // advisor user id when senderType = advisor
+   449→  enquiryId  String? // thread root
+   450→  body       String
+   451→  readAt     DateTime?
+   452→  createdAt  DateTime  @default(now())
+   453→
+   454→  enquiry Enquiry? @relation(fields: [enquiryId], references: [id], onDelete: Cascade)
+   455→
+   456→  @@index([userId, createdAt])
+   457→  @@index([enquiryId])
+   458→}
+   459→
+   460→model Notification {
+   461→  id             String    @id @default(cuid())
+   462→  userId         String
+   463→  category       String    @default("system") // documents | orders | opportunities | studio | mandates | messages | security | system
+   464→  event          String? // fine-grained event key, e.g. order.delivered, document.granted
+   465→  type           String    @default("system") // legacy coarse key (order_status | message | mandate | document | match | security | system)
+   466→  priority       String    @default("normal") // low | normal | high | critical
+   467→  title          String
+   468→  body           String?
+   469→  link           String? // portal path for deep-linking
+   470→  payload        Json? // minimal, NON-sensitive rendering context only
+   471→  dedupeKey      String? // idempotency key for repeated events
+   472→  announcementId String? // admin one-off announcement source
+   473→  readAt         DateTime?
+   474→  createdAt      DateTime  @default(now())
+   475→
+   476→  deliveries    NotificationDelivery[]
+   477→  announcement  NotificationAnnouncement? @relation(fields: [announcementId], references: [id])
+   478→
+   479→  @@index([userId, readAt])
+   480→  @@index([userId, createdAt])
+   481→  @@index([category, createdAt])
+   482→  @@index([announcementId])
+   483→  @@index([dedupeKey])
+   484→}
+   485→
+   486→// Per-investor global notification switches (Profile & Preferences → Notifications).
+   487→model NotificationSetting {
+   488→  id              String   @id @default(cuid())
+   489→  userId          String   @unique
+   490→  globalEnabled   Boolean  @default(true)
+   491→  quietStartMin   Int? // minutes from midnight in the investor's local time
+   492→  quietEndMin     Int?
+   493→  digestEnabled   Boolean  @default(false)
+   494→  digestFrequency String   @default("weekly") // daily | weekly
+   495→  emailSuppressed Boolean  @default(false) // admin hard suppression (bounce handling)
+   496→  createdAt       DateTime @default(now())
+   497→  updatedAt       DateTime @updatedAt
+   498→}
+   499→
+   500→// Granular channel × category matrix. Absent rows fall back to the
+   501→// high-signal defaults in src/lib/notifications/events.ts.
+   502→model NotificationPreference {
+   503→  id        String   @id @default(cuid())
+   504→  userId    String
+   505→  channel   String // in_app | push | email
+   506→  category  String // documents | orders | opportunities | studio | mandates | messages | security | system
+   507→  enabled   Boolean  @default(true)
+   508→  createdAt DateTime @default(now())
+   509→  updatedAt DateTime @updatedAt
+   510→
+   511→  @@unique([userId, channel, category])
+   512→  @@index([userId])
+   513→}
+   514→
+   515→// Web Push (VAPID) browser subscriptions — desktop & installed PWA.
+   516→model PushSubscription {
+   517→  id          String    @id @default(cuid())
+   518→  userId      String
+   519→  endpoint    String    @unique // push service URL (never shared; used for delivery)
+   520→  p256dh      String // client public key
+   521→  auth        String // client auth secret
+   522→  platform    String    @default("desktop") // desktop | mobile | other
+   523→  userAgent   String?
+   524→  deviceLabel String?
+   525→  lastSeenAt  DateTime  @default(now())
+   526→  revokedAt   DateTime? // set when the push service returns 410/404
+   527→  createdAt   DateTime  @default(now())
+   528→
+   529→  @@index([userId])
+   530→  @@index([userId, revokedAt])
+   531→}
+   532→
+   533→// Per-channel delivery ledger — the admin Notification Log and every
+   534→// audit/compliance question ("who was told what, when, on which channel")
+   535→// is answered from this table.
+   536→model NotificationDelivery {
+   537→  id             String    @id @default(cuid())
+   538→  notificationId String
+   539→  channel        String // in_app | push | email
+   540→  status         String    @default("sent") // queued | digest_queued | sent | failed | bounced | suppressed | skipped
+   541→  address        String? // masked recipient (j***@domain.com) or device label
+   542→  detail         String? // suppression reason / error message (non-sensitive)
+   543→  messageId      String? // SMTP response id when available
+   544→  sentAt         DateTime?
+   545→  createdAt      DateTime  @default(now())
+   546→
+   547→  notification Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+   548→
+   549→  @@index([notificationId])
+   550→  @@index([channel, status, createdAt])
+   551→  @@index([createdAt])
+   552→}
+   553→
+   554→// Admin-managed transactional email templates. Defaults ship in code
+   555→// (src/lib/notifications/email-defaults.ts); rows here override them.
+   556→model EmailTemplate {
+   557→  id          String   @id @default(cuid())
+   558→  key         String   @unique // e.g. order_delivered, document_ready
+   559→  category    String
+   560→  subject     String
+   561→  preheader   String?
+   562→  bodyHtml    String // {{placeholder}} syntax
+   563→  bodyText    String
+   564→  isActive    Boolean  @default(true)
+   565→  version     Int      @default(1)
+   566→  updatedById String?
+   567→  createdAt   DateTime @default(now())
+   568→  updatedAt   DateTime @updatedAt
+   569→
+   570→  versions EmailTemplateVersion[]
+   571→
+   572→  @@index([category])
+   573→}
+   574→
+   575→// Immutable version history for template edits (audit).
+   576→model EmailTemplateVersion {
+   577→  id         String   @id @default(cuid())
+   578→  templateId String
+   579→  version    Int
+   580→  subject    String
+   581→  preheader  String?
+   582→  bodyHtml   String
+   583→  bodyText   String
+   584→  savedById  String?
+   585→  createdAt  DateTime @default(now())
+   586→
+   587→  template EmailTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+   588→
+   589→  @@unique([templateId, version])
+   590→}
+   591→
+   592→// Controlled, audited one-off announcements to selected investors / segments.
+   593→model NotificationAnnouncement {
+   594→  id             String   @id @default(cuid())
+   595→  title          String
+   596→  body           String
+   597→  link           String?
+   598→  category       String   @default("system")
+   599→  priority       String   @default("high")
+   600→  audience       Json // {tiers:[], classifications:[], userIds:[], advisors:[]}
+   601→  createdById    String
+   602→  recipientCount Int      @default(0)
+   603→  sentAt         DateTime?
+   604→  createdAt      DateTime @default(now())
+   605→
+   606→  notifications Notification[]
+   607→
+   608→  @@index([createdAt])
+   609→}
+   610→
+   611→// ---------------------------------------------------------------------------
+   612→// Secure data room (Sanity-sourced documents + local permissions/audit)
+   613→// ---------------------------------------------------------------------------
+   614→
+   615→model DocumentGrant {
+   616→  id                String    @id @default(cuid())
+   617→  sanityDocumentId  String
+   618→  userId            String? // null when granted at organisation level
+   619→  organisationId    String?
+   620→  grantedById       String // advisor/admin who granted
+   621→  permission        String    @default("view") // view | download
+   622→  expiresAt         DateTime?
+   623→  createdAt         DateTime  @default(now())
+   624→
+   625→  @@unique([sanityDocumentId, userId, organisationId])
+   626→}
+   627→
+   628→model DocumentAccessLog {
+   629→  id                String   @id @default(cuid())
+   630→  userId            String
+   631→  sanityDocumentId  String
+   632→  documentTitle     String?
+   633→  action            String // view | download | request
+   634→  ip                String?
+   635→  userAgent         String?
+   636→  createdAt         DateTime @default(now())
+   637→
+   638→  @@index([userId, createdAt])
+   639→  @@index([sanityDocumentId, createdAt])
+   640→}
+   641→
+   642→model DocumentRequest {
+   643→  id                 String   @id @default(cuid())
+   644→  userId             String
+   645→  subject            String
+   646→  detail             String?
+   647→  sanityOpportunityId String?
+   648→  type               String   @default("data_room") // data_room | report | model | legal | custom
+   649→  status             String   @default("submitted") // submitted | in_review | ready | declined
+   650→  createdAt          DateTime @default(now())
+   651→  updatedAt          DateTime @updatedAt
+   652→
+   653→  @@index([userId, status])
+   654→}
+   655→
+   656→model NdaAgreement {
+   657→  id        String   @id @default(cuid())
+   658→  userId    String
+   659→  version   String
+   660→  ip        String?
+   661→  userAgent String?
+   662→  createdAt DateTime @default(now())
+   663→
+   664→  @@unique([userId, version])
+   665→}
+   666→
+   667→// ---------------------------------------------------------------------------
+   668→// Portfolio & capital calls
+   669→// ---------------------------------------------------------------------------
+   670→
+   671→model PortfolioPosition {
+   672→  id                 String    @id @default(cuid())
+   673→  userId             String
+   674→  name              String
+   675→  sanityOpportunityId String? // origin opportunity if sourced via portal
+   676→  assetClass        String?
+   677→  geography         String?
+   678→  status            String    @default("committed") // committed | held | exited
+   679→
+   680→  acquisitionDate   DateTime?
+   681→  purchasePrice     Float?
+   682→  currency          String    @default("USD")
+   683→  equityDeployed    Float?
+   684→  debtAmount        Float?
+   685→  debtRate          Float?
+   686→  debtMaturity      DateTime?
+   687→
+   688→  // Latest period actuals (self-reported / advisor-maintained)
+   689→  grossIncomeAnnual Float?
+   690→  operatingExpenses Float?
+   691→  noiActual         Float?
+   692→  occupancyPct      Float?
+   693→  valuation         Float?
+   694→  valuationDate     DateTime?
+   695→  valuationBasis    String? // independent_valuation | appraisal | manager_estimate
+   696→
+   697→  notes             String?
+   698→  createdAt         DateTime  @default(now())
+   699→  updatedAt         DateTime  @updatedAt
+   700→
+   701→  capitalCalls CapitalCall[]
+   702→
+   703→  @@index([userId, status])
+   704→}
+   705→
+   706→model CapitalCall {
+   707→  id         String    @id @default(cuid())
+   708→  positionId String
+   709→  label      String
+   710→  amount     Float
+   711→  currency   String    @default("USD")
+   712→  dueDate    DateTime?
+   713→  status     String    @default("scheduled") // scheduled | called | paid | waived
+   714→  calledAt   DateTime?
+   715→  paidAt     DateTime?
+   716→  notes      String?
+   717→  createdAt  DateTime  @default(now())
+   718→
+   719→  position PortfolioPosition @relation(fields: [positionId], references: [id], onDelete: Cascade)
+   720→
+   721→  @@index([positionId, status])
+   722→}
+   723→
+   724→// ---------------------------------------------------------------------------
+   725→// Admin Internal System (sql/004_admin_schema.sql)
+   726→// ---------------------------------------------------------------------------
+   727→
+   728→model StaffProfile {
+   729→  id        String   @id @default(cuid())
+   730→  userId    String   @unique
+   731→  adminRole String   @default("advisor") // super_admin | ops_lead | advisor | compliance | finance | content | analyst
+   732→  title     String?
+   733→  team      String?
+   734→  isActive  Boolean  @default(true)
+   735→  createdAt DateTime @default(now())
+   736→  updatedAt DateTime @updatedAt
+   737→
+   738→  @@index([adminRole, isActive])
+   739→}
+   740→
+   741→model OrderStatusEvent {
+   742→  id          String    @id @default(cuid())
+   743→  orderId     String
+   744→  fromStatus  String?
+   745→  toStatus    String
+   746→  changedById String?
+   747→  note        String?
+   748→  createdAt   DateTime  @default(now())
+   749→
+   750→  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+   751→
+   752→  @@index([orderId, createdAt])
+   753→}
+   754→
+   755→model RevenueEvent {
+   756→  id             String   @id @default(cuid())
+   757→  orderId        String   @unique
+   758→  grossKes       Float    @default(0)
+   759→  grossUsd       Float    @default(0)
+   760→  processingUsd  Float    @default(0) // payment processing cost estimate
+   761→  refundUsd      Float    @default(0) // approved refunds, cumulative
+   762→  netUsd         Float    @default(0) // gross - processing - refunds
+   763→  recognisedAt   DateTime @default(now())
+   764→  recognisedById String?
+   765→  note           String?
+   766→
+   767→  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+   768→
+   769→  @@index([recognisedAt])
+   770→}
+   771→
+   772→model RefundAdjustment {
+   773→  id            String    @id @default(cuid())
+   774→  orderId       String
+   775→  amountUsd     Float
+   776→  amountKes     Float    @default(0)
+   777→  reason        String
+   778→  status        String    @default("proposed") // proposed | approved | rejected | applied
+   779→  requestedById String
+   780→  reviewedById  String?
+   781→  reviewedAt    DateTime?
+   782→  createdAt     DateTime  @default(now())
+   783→
+   784→  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+   785→
+   786→  @@index([orderId])
+   787→  @@index([status])
+   788→}
+   789→
+   790→model ComplianceReview {
+   791→  id            String   @id @default(cuid())
+   792→  subjectUserId String
+   793→  reviewerId    String
+   794→  decision      String // approved | rejected | escalated | note
+   795→  notes         String?
+   796→  riskFlags     Json? // [{flag, severity, note}]
+   797→  detail        Json? // {before, after, actions}
+   798→  createdAt     DateTime @default(now())
+   799→
+   800→  @@index([subjectUserId, createdAt])
+   801→}
+   802→
+   803→model InternalNote {
+   804→  id         String   @id @default(cuid())
+   805→  entityType String // investor | order | mandate | opportunity | enquiry | organisation | compliance | content
+   806→  entityId   String
+   807→  authorId   String
+   808→  body       String
+   809→  visibility String   @default("staff") // staff | admins
+   810→  createdAt  DateTime @default(now())
+   811→
+   812→  @@index([entityType, entityId, createdAt])
+   813→}
+   814→
+   815→model ContentMeta {
+   816→  id             String   @id @default(cuid())
+   817→  contentType    String // opportunity | brief | document | report
+   818→  sanityId       String
+   819→  title          String?
+   820→  tags           Json?
+   821→  status         String   @default("live") // live | paused | archived
+   822→  featured       Boolean  @default(false)
+   823→  visibilityTier String   @default("tier_1") // governance override floor
+   824→  notes          String?
+   825→  updatedById    String?
+   826→  createdAt      DateTime @default(now())
+   827→  updatedAt      DateTime @updatedAt
+   828→
+   829→  @@unique([contentType, sanityId])
+   830→  @@index([contentType, status])
+   831→}
+   832→
+   833→model SystemSetting {
+   834→  id          String   @id @default(cuid())
+   835→  key         String   @unique
+   836→  category    String   @default("general") // general | feature_flag | integration
+   837→  value       Json?
+   838→  description String?
+   839→  updatedById String?
+   840→  createdAt   DateTime @default(now())
+   841→  updatedAt   DateTime @updatedAt
+   842→}
+   843→
+   844→// ---------------------------------------------------------------------------
+   845→// Audit trail (every sensitive interaction)
+   846→// ---------------------------------------------------------------------------
+   847→
+   848→model AuditLog {
+   849→  id        String   @id @default(cuid())
+   850→  actorId   String?
+   851→  actorType String   @default("user") // user | advisor | admin | system
+   852→  action    String // e.g. auth.login, order.created, payment.verified, document.downloaded, permission.changed
+   853→  entity    String?
+   854→  entityId  String?
+   855→  detail    Json?
+   856→  ip        String?
+   857→  userAgent String?
+   858→  createdAt DateTime @default(now())
+   859→
+   860→  @@index([createdAt])
+   861→  @@index([actorId, createdAt])
+   862→  @@index([entity, entityId])
+   863→}
+   864→

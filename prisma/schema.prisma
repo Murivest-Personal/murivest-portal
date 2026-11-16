@@ -2,9 +2,35 @@
 // Murivest Private Capital Portal — Prisma Schema
 // ---------------------------------------------------------------------
 // Runtime schema for the Next.js application. The sandbox/dev runtime
-// uses SQLite. For production, switch the provider to "postgresql"
-// and point DATABASE_URL at your managed instance, then run
-// `prisma db push` (or apply sql/001_schema.sql + 002_rls.sql first).
+// uses SQLite (DATABASE_URL = file:…/db/custom.db) and is untouched by
+// the production instructions below.
+//
+// PRODUCTION (PostgreSQL on Supabase) — the Supavisor split:
+//   1. Apply the DDL first over the migration connection (session
+//      pooler / direct host — see README → Database):
+//        psql "$DIRECT_URL" -f sql/001_schema.sql  …  sql/006_notifications_schema.sql
+//   2. Switch the datasource below to:
+//
+//        datasource db {
+//          provider  = "postgresql"
+//          url       = env("DATABASE_URL")   // Supavisor TRANSACTION pooler (:6543) — runtime
+//          directUrl = env("DIRECT_URL")     // session pooler (:5432) / direct — migrate & db push
+//        }
+//
+//      DATABASE_URL = postgresql://postgres.<ref>:<pw>@aws-0-<region>.pooler.supabase.com:6543/postgres?pgbouncer=true&connection_limit=1
+//      DIRECT_URL   = postgresql://postgres.<ref>:<pw>@aws-0-<region>.pooler.supabase.com:5432/postgres
+//
+//      `pgbouncer=true` is REQUIRED on the 6543 string: transaction
+//      mode does not support prepared statements, so Prisma disables
+//      them (interactive transactions used by withUserContext() keep
+//      working — Supavisor pins one backend per transaction and
+//      set_config(…, true) is transaction-scoped). Keep
+//      connection_limit=1 for serverless / auto-scaling deployments;
+//      a single dedicated server may use 5–10.
+//
+//      NEVER point DATABASE_URL at the direct db.<ref>.supabase.co
+//      host: it is IPv6-only (unreachable from IPv4-only hosts) and
+//      bypasses pooling. src/lib/db.ts warns at boot if it sees it.
 //
 // NOTE (SQLite runtime): enums are not supported by the SQLite
 // connector, so constrained fields are declared as String and enforced
