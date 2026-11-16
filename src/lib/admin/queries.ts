@@ -244,8 +244,13 @@ export async function investorDetail(actx: AdminContext, userId: string) {
   if (!profileRow) return null
   if (scope && profileRow.advisor_id !== actx.auth.user.id) return null
   const profile = toCamel(profileRow)
+  const userLookup = unwrapNullable<UserRow>(
+    await supabase.from('users').select('*').eq('id', userId).maybeSingle(),
+    'users.get',
+  )
+  if (!userLookup) return null // FK guarantees the user; defensive null for typed consumers
 
-  const [org, orderRows, mandateRows, grantRows, sessionRows, secEventRows, noteRows, reviewRows, criteriaRow, savedCount, scenarioCount, enquiriesCount, auditRows, advisorRow, userRow] = await Promise.all([
+  const [org, orderRows, mandateRows, grantRows, sessionRows, secEventRows, noteRows, reviewRows, criteriaRow, savedCount, scenarioCount, enquiriesCount, auditRows, advisorRow] = await Promise.all([
     profile.organisationId ? organisationWithMembers(profile.organisationId) : null,
     unwrap<OrderRow[]>(await supabase.from('orders').select('*').eq('user_id', userId).order('created_at', {ascending: false}), 'orders.list'),
     unwrap<MandateRow[]>(await supabase.from('mandates').select('*').eq('user_id', userId).order('created_at', {ascending: false}), 'mandates.list'),
@@ -269,7 +274,6 @@ export async function investorDetail(actx: AdminContext, userId: string) {
     profile.advisorId
       ? unwrapNullable<UserRow>(await supabase.from('users').select('*').eq('id', profile.advisorId).maybeSingle(), 'users.get')
       : null,
-    unwrapNullable<UserRow>(await supabase.from('users').select('*').eq('id', userId).maybeSingle(), 'users.get'),
   ])
 
   const staffIds = [...new Set([...noteRows.map((n) => n.author_id), ...reviewRows.map((r) => r.reviewer_id)].filter((x): x is string => !!x))]
@@ -278,20 +282,18 @@ export async function investorDetail(actx: AdminContext, userId: string) {
 
   return {
     profile,
-    user: userRow
-      ? {
-          id: userRow.id,
-          email: userRow.email,
-          fullName: userRow.full_name,
-          status: userRow.status,
-          lastLoginAt: userRow.last_login_at,
-          createdAt: userRow.created_at,
-          emailVerifiedAt: userRow.email_verified_at,
-          mfaEnabled: userRow.mfa_enabled,
-          failedLogins: userRow.failed_logins,
-          lockedUntil: userRow.locked_until,
-        }
-      : null,
+    user: {
+      id: userLookup.id,
+      email: userLookup.email,
+      fullName: userLookup.full_name,
+      status: userLookup.status,
+      lastLoginAt: userLookup.last_login_at,
+      createdAt: userLookup.created_at,
+      emailVerifiedAt: userLookup.email_verified_at,
+      mfaEnabled: userLookup.mfa_enabled,
+      failedLogins: userLookup.failed_logins,
+      lockedUntil: userLookup.locked_until,
+    },
     organisation: org,
     advisor: advisorRow ? {id: advisorRow.id, fullName: advisorRow.full_name, email: advisorRow.email} : null,
     orders: orderRows.map((o) => ({
@@ -967,7 +969,7 @@ export async function complianceQueue() {
         nationality: p.nationality,
         countryResidence: p.country_residence,
         advisorId: p.advisor_id,
-        createdAt: u?.created_at ?? null,
+        createdAt: u?.created_at ?? p.created_at,
         updatedAt: p.updated_at,
       }
     }),
@@ -1111,7 +1113,7 @@ export async function staffList() {
   const profileRows = unwrap<StaffProfileRow[]>(await supabase.from('staff_profiles').select('*'), 'staffProfiles.list')
   const profileBy = new Map(profileRows.map((p) => [p.user_id, p]))
   return staffRows.map((s) => ({
-    id: s.id,
+    userId: s.id,
     email: s.email,
     fullName: s.full_name,
     role: s.role,

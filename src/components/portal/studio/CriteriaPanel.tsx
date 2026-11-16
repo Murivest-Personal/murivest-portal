@@ -72,7 +72,7 @@ export default function CriteriaPanel({initial}: {initial: CriteriaInput | null}
     }
   }
 
-  const geoRows = (form.geographies || []) as {country?: string; city?: string}[]
+  const geoRows = (form.geographies || []) as {country: string; city?: string}[]
 
   return (
     <div className="space-y-6">

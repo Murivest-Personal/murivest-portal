@@ -1,5 +1,5 @@
 import type {Metadata} from 'next'
-import {supabase, unwrapNullable, toCamel} from '@/lib/supabase'
+import {supabase, unwrapNullable, toCamel, type CamelizeRow} from '@/lib/supabase'
 import type {OrganisationRow} from '@/lib/db-types'
 import {requirePortalUser, classificationLabel, tierLabel} from '@/lib/auth/context'
 import ProfileEditor from '@/components/portal/ProfileEditor'
@@ -15,18 +15,20 @@ export const dynamic = 'force-dynamic'
 export default async function ProfilePage() {
   const ctx = await requirePortalUser()
   const profile = ctx.profile
-  const org = profile?.organisationId
-    ? await supabase
+  let org: CamelizeRow<OrganisationRow> | null = null
+  if (profile?.organisationId) {
+    try {
+      const res = await supabase
         .from('organisations')
         .select('*')
         .eq('id', profile.organisationId)
         .maybeSingle()
-        .then((res) => {
-          const row = unwrapNullable<OrganisationRow>(res, 'organisation.get')
-          return row ? toCamel(row) : null
-        })
-        .catch(() => null)
-    : null
+      const row = unwrapNullable<OrganisationRow>(res, 'organisation.get')
+      org = row ? toCamel(row) : null
+    } catch {
+      org = null
+    }
+  }
 
   return (
     <div>

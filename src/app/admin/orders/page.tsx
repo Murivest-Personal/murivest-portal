@@ -26,9 +26,9 @@ export default async function AdminOrdersPage({
       <OrdersWorkspace
         initial={orders.map((o) => ({
           ...o,
-          createdAt: o.createdAt.toISOString(),
-          dueAt: o.dueAt?.toISOString() ?? null,
-          deliveredAt: o.deliveredAt?.toISOString() ?? null,
+          createdAt: o.createdAt,
+          dueAt: o.dueAt ?? null,
+          deliveredAt: o.deliveredAt ?? null,
           payment: o.payment
             ? {
                 id: o.payment.id,
@@ -37,7 +37,7 @@ export default async function AdminOrdersPage({
                 amountUsd: o.payment.amountUsd,
                 amountKes: o.payment.amountKes,
                 reference: o.payment.reference,
-                createdAt: o.payment.createdAt.toISOString(),
+                createdAt: o.payment.createdAt,
               }
             : null,
         }))}

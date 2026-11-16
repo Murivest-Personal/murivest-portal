@@ -1,5 +1,4 @@
 import {cn} from '@/lib/utils'
-import type {PortableTextBlock} from '@/lib/sanity/types'
 
 /**
  * Minimal Portable Text renderer for Sanity-authored long-form content

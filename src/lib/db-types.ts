@@ -6,7 +6,7 @@
 // Use toCamel() from '@/lib/supabase' to work in camelCase in app code.
 //
 // Two exports per model: <Model>Row (snake_case, DB shape) and <Model>
-// (camelCase view, replaces the former @prisma/client model types).
+// (camelCase view). Regenerate: python3 scripts/extract-mapping.py
 // ============================================================================
 
 export type Json = string | number | boolean | null | Json[] | { [k: string]: Json }
@@ -241,11 +241,6 @@ export interface OrderRow {
   status: string
   payment_method: string
   transaction_id: string
-  assigned_to_id: string
-  advisor_id: string
-  priority: string
-  due_at: string
-  delivery_document_id: string
   contact_name: string
   contact_email: string
   organisation: string
@@ -256,9 +251,14 @@ export interface OrderRow {
   cancelled_at: string
   cancellation_reason: string
   delivered_at: string
-  closed_at: string
   created_at: string
   updated_at: string
+  assigned_to_id: string
+  advisor_id: string
+  priority: string
+  due_at: string
+  delivery_document_id: string
+  closed_at: string
 }
 export type Order = CamelizeRow<OrderRow>
 
@@ -303,15 +303,15 @@ export interface MandateRow {
   risk_mandate: string
   exclusions: Json
   advisor_id: string
-  stage: string
-  probability: number
-  next_action: string
-  next_action_due: string
   submitted_at: string
   activated_at: string
   closed_at: string
   created_at: string
   updated_at: string
+  stage: string
+  probability: number
+  next_action: string
+  next_action_due: string
 }
 export type Mandate = CamelizeRow<MandateRow>
 
@@ -359,18 +359,19 @@ export type Message = CamelizeRow<MessageRow>
 export interface NotificationRow {
   id: string
   user_id: string
-  category: string
-  event: string
   type: string
-  priority: string
   title: string
   body: string
   link: string
+  read_at: string
+  created_at: string
+  category: string
+  event: string
+  priority: string
   payload: Json
   dedupe_key: string
   announcement_id: string
-  read_at: string
-  created_at: string
+  updated_at: string
 }
 export type Notification = CamelizeRow<NotificationRow>
 

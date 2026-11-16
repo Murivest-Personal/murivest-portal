@@ -169,7 +169,7 @@ export default function NotificationsWorkspace({canManage, canBroadcast}: {canMa
       notifyGet('templates'),
     ])
     if (s.ok && s.data) setStats(s.data as unknown as Stats)
-    else setError(s.error)
+    else setError(s.error ?? null)
     if (l.ok && l.data) setLog((l.data.log as LogRow[]) ?? [])
     if (a.ok && a.data) setAnnouncements((a.data.announcements as AnnouncementRow[]) ?? [])
     if (t.ok && t.data) {

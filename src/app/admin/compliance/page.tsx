@@ -18,11 +18,11 @@ export default async function AdminCompliancePage() {
       />
       <ComplianceWorkspace
         data={{
-          pending: data.pending.map((p) => ({...p, createdAt: p.createdAt.toISOString(), updatedAt: p.updatedAt.toISOString()})),
+          pending: data.pending.map((p) => ({...p, createdAt: p.createdAt, updatedAt: p.updatedAt})),
           ndaGaps: data.ndaGaps,
-          docRequests: data.docRequests.map((r) => ({...r, createdAt: r.createdAt.toISOString()})),
+          docRequests: data.docRequests.map((r) => ({...r, createdAt: r.createdAt})),
           flagged: data.flagged,
-          reviews: data.reviews.map((r) => ({...r, createdAt: r.createdAt.toISOString()})),
+          reviews: data.reviews.map((r) => ({...r, createdAt: r.createdAt})),
           can: {review: actx.can('compliance.review'), manage: actx.can('investors.manage')},
         }}
       />

@@ -1,7 +1,12 @@
-import {randomBytes, scrypt as _scrypt, timingSafeEqual} from 'node:crypto'
+import {randomBytes, scrypt as _scrypt, timingSafeEqual, type ScryptOptions} from 'node:crypto'
 import {promisify} from 'node:util'
 
-const scrypt = promisify(_scrypt)
+const scrypt = promisify(_scrypt) as (
+  password: string,
+  salt: Buffer,
+  keylen: number,
+  options: ScryptOptions,
+) => Promise<Buffer>
 
 const N = 16384 // 2^14 — deliberate cost for institutional accounts
 const R = 8

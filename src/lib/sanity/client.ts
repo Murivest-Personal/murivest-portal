@@ -27,7 +27,6 @@ export function sanityClient(): SanityClient | null {
     useCdn: process.env.SANITY_USE_CDN === 'true', // institutional data: default to fresh reads
     token: process.env.SANITY_API_READ_TOKEN || undefined,
     perspective: 'published',
-    studioUrl: process.env.SANITY_STUDIO_URL || undefined,
   })
   return cached
 }

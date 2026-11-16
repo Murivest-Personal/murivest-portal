@@ -87,6 +87,8 @@ export interface BriefDoc {
   deliveryExpectations?: string | null
   pricing?: BriefPricing | null
   linkedOpportunity?: {_ref: string} | null
+  /** GROQ projection: linkedOpportunity->_id (flat). */
+  linkedOpportunityId?: string | null
   auctionRef?: string | null
   coverImage?: SanityImage | null
   description?: string | null
@@ -103,6 +105,11 @@ export interface DocumentDoc {
   linkedOpportunity?: {_ref: string} | null
   downloadable?: boolean | null
   publishDate?: string | null
+  /** GROQ projections (lib/sanity/queries.ts): file.asset->_ref / ->extension / ->size, linkedOpportunity->_id. */
+  fileRef?: string | null
+  fileExtension?: string | null
+  fileSize?: number | null
+  linkedOpportunityId?: string | null
 }
 
 export interface MarketReportDoc {
@@ -117,6 +124,8 @@ export interface MarketReportDoc {
   body?: unknown[] | null
   coverImage?: SanityImage | null
   attachDocument?: {_ref: string} | null
+  /** GROQ projection: attachDocument->_id (flat). */
+  attachedDocumentId?: string | null
   publishDate?: string | null
 }
 

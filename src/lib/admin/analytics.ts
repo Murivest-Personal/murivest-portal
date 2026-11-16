@@ -186,9 +186,9 @@ export async function executiveSnapshot(period: Period): Promise<{
 export async function investorAnalytics(period: Period): Promise<{
   sources: {label: string; count: number}[]
   funnel: {stage: string; count: number}[]
-  engagement: {userId: string; name: string; classification: string; logins: number; saved: number; scenarios: number; comparisons: number; lastLoginAt: Date | null}[]
+  engagement: {userId: string; name: string; classification: string; logins: number; saved: number; scenarios: number; comparisons: number; lastLoginAt: string | null}[]
   highValue: {userId: string; name: string; totalOrders: number; revenueUsd: number; classification: string}[]
-  dormant: {userId: string; name: string; email: string; lastLoginAt: Date | null; daysSinceLogin: number | null; tier: string}[]
+  dormant: {userId: string; name: string; email: string; lastLoginAt: string | null; daysSinceLogin: number | null; tier: string}[]
   engagementTotals: {logins: number; saved: number; scenarios: number}
 }> {
   const [profileRows, sessionRows, savedRows, scenarioRows, comparisonRows, userRows, revenueEventRows] = await Promise.all([
@@ -298,7 +298,7 @@ export async function investorAnalytics(period: Period): Promise<{
         saved: saveCounts.get(p.userId) ?? 0,
         scenarios: scenarioCounts.get(p.userId) ?? 0,
         comparisons: comparisonCounts.get(p.userId) ?? 0,
-        lastLoginAt: u?.lastLoginAt ?? null,
+        lastLoginAt: u?.lastLoginAt?.toISOString() ?? null,
       }
     })
     .sort((a, b) => b.logins + b.saved + b.scenarios - (a.logins + a.saved + a.scenarios))
@@ -332,7 +332,7 @@ export async function investorAnalytics(period: Period): Promise<{
     .map((p) => {
       const u = byId.get(p.userId)
       const days = u?.lastLoginAt ? Math.floor((now - u.lastLoginAt.getTime()) / 86400000) : null
-      return {userId: p.userId, name: u?.fullName || u?.email || p.userId, email: u?.email ?? '', lastLoginAt: u?.lastLoginAt ?? null, daysSinceLogin: days, tier: p.accessTier}
+      return {userId: p.userId, name: u?.fullName || u?.email || p.userId, email: u?.email ?? '', lastLoginAt: u?.lastLoginAt?.toISOString() ?? null, daysSinceLogin: days, tier: p.accessTier}
     })
     .filter((d) => d.daysSinceLogin == null || d.daysSinceLogin >= 60)
     .sort((a, b) => (b.daysSinceLogin ?? 9999) - (a.daysSinceLogin ?? 9999))

@@ -30,7 +30,7 @@ export default async function AdminHomePage() {
         revenue={{card, breakdowns}}
         executive={exec}
         queues={centre.queues}
-        activity={centre.activity.map((a) => ({...a, createdAt: a.createdAt.toISOString()}))}
+        activity={centre.activity.map((a) => ({...a, createdAt: a.createdAt}))}
         quickActions={centre.quickActions}
         can={{
           broadcast: actx.can('broadcast.send'),

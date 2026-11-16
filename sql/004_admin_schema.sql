@@ -20,8 +20,8 @@
 --   • mandates (altered)      — pipeline stage, win probability, next action
 --
 -- Apply AFTER 001/002/003:
---   psql "$DATABASE_URL" -f sql/004_admin_schema.sql
---   psql "$DATABASE_URL" -f sql/005_admin_rls.sql
+--   psql "$DIRECT_URL" -f sql/004_admin_schema.sql
+--   psql "$DIRECT_URL" -f sql/005_admin_rls.sql
 --
 -- Enum values for order_status are extended first (outside the transaction:
 -- ALTER TYPE ... ADD VALUE cannot run inside a block on PostgreSQL < 12).

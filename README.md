@@ -2,7 +2,7 @@
 
 Institutional & UHNWI investment workspace for **Murivest Group Ltd** — a private capital allocation environment for UHNWIs, family offices and institutional investors across East Africa (Nairobi), the United Kingdom (London) and international markets.
 
-Built as a **clean, purpose-built institutional product**: Next.js 16 (App Router, TypeScript), Tailwind CSS 4, shadcn/ui, Prisma, **Sanity as the single content source** (properties, briefs, data-room documents, market intelligence), DB-backed sessions with scrypt + TOTP MFA, and **zero sample data** — every surface renders purposeful empty states until real content is published.
+Built as a **clean, purpose-built institutional product**: Next.js 16 (App Router, TypeScript), Tailwind CSS 4, shadcn/ui, **Supabase (PostgreSQL) via the service-role JS client** for all runtime data, **Sanity as the single content source** (properties, briefs, data-room documents, market intelligence), DB-backed sessions with scrypt + TOTP MFA, and **zero sample data** — every surface renders purposeful empty states until real content is published.
 
 ---
 
@@ -30,6 +30,8 @@ src/
     api/                     Route handlers (auth, orders, payments, scenarios,
                              mandates, documents, staff desk dispatcher…)
   lib/
+    supabase.ts             Service-role Supabase client (all runtime DB access)
+    db-types.ts             DDL-derived row types (snake_case rows + camelCase views)
     auth/                    scrypt · opaque sessions · TOTP · tokens · guards · audit
     finance/engine.ts        Transparent financial engine (NOI, DSCR, IRR, sensitivities)
     sanity/                 Server-only Sanity client + GROQ + types
@@ -56,12 +58,19 @@ scripts/create-admin.mjs    First-run administrator bootstrap
 | **Profile & Preferences** | Investor classification, verification status, capacity, communication preferences |
 | **Account & Security** | Password policy, TOTP MFA (QR), device-recognised sessions with revocation, security history |
 
-## Database
+## Database — Supabase (service-role client)
 
-Two views of one model:
+**All runtime DB access goes through the Supabase JS client** (`src/lib/supabase.ts`) — HTTPS/PostgREST, no Prisma, no direct Postgres connections, no connection-pooler configuration at the application tier:
 
-- **Runtime (dev/sandbox)**: Prisma + SQLite (`prisma/schema.prisma`). `bun run db:push` keeps it in sync.
-- **Production**: PostgreSQL DDL in `sql/`, applied over the **migration connection** (`$DIRECT_URL` — session pooler or direct host), never the runtime pooler:
+```ts
+import {supabase, unwrap, unwrapNullable, unwrapCount, toCamel, toCamelList, toSnake, nowIso, newId, auditTable} from '@/lib/supabase'
+
+const orders = toCamelList(unwrap<OrderRow[]>(await supabase.from('orders').select('*').eq('user_id', userId), 'orders.list'))
+```
+
+Configuration (copy from **Supabase Dashboard → Settings → API**): `NEXT_PUBLIC_SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` (server-side only — never in the browser bundle). The client pins `db.schema = 'portal'`; row types live in `src/lib/db-types.ts` (snake_case rows + camelCase views), generated from the DDL by `scripts/extract-mapping.py`.
+
+**Provisioning** — the schema is plain PostgreSQL DDL, applied once via the Supabase SQL Editor or `psql` (session pooler `:5432` or direct host — the direct `db.<ref>.supabase.co` host is IPv6-only without the IPv4 add-on):
 
 ```bash
 psql "$DIRECT_URL" -f sql/001_schema.sql    # 27 tables + enums + triggers + audit capture
@@ -72,35 +81,15 @@ psql "$DIRECT_URL" -f sql/005_admin_rls.sql    # Admin RBAC at the database leve
 psql "$DIRECT_URL" -f sql/006_notifications_schema.sql # Notifications (deliveries, prefs, push, templates)
 ```
 
+Then in **Supabase Dashboard → Settings → API → Exposed schemas** add `portal` and `audit` (keep `public`) so the PostgREST endpoint serves them. Ids are TEXT, generated application-side (`newId()`); `updated_at` is trigger-maintained.
+
 Admin system tables (`sql/004_admin_schema.sql`): `staff_profiles` (granular RBAC roles) · `order_status_events` (lifecycle history) · `revenue_events` (recognition ledger — one per order) · `refund_adjustments` (controlled refunds) · `compliance_reviews` (KYC/AML decisions with before/after snapshots) · `internal_notes` · `content_meta` (governance layer over Sanity content: visibility floor, tags, live/paused/archived) · `system_settings` (feature flags & integration values — never secrets). Orders gain `assigned_to_id · advisor_id · priority · due_at · delivery_document_id · closed_at` and the extended status set (`internal_review`, `closed`); mandates gain `stage · probability · next_action · next_action_due`.
 
 Tables cover every interaction: `users · sessions · auth_tokens · security_events · organisations · organisation_members · investor_profiles · investor_criteria · saved_opportunities · opportunity_views · saved_searches · scenarios · comparisons · orders · payments · mandates · mandate_milestones · enquiries · messages · notifications · document_grants · document_access_logs · document_requests · nda_agreements · portfolio_positions · capital_calls · audit.logs`.
 
-**RLS posture** (sql/002_rls.sql): investors see only their own rows; advisors see assigned investors plus fulfilment tables; admins see all; audit inserts from the app tier are always permitted. The trusted app sets `app.user_id` / `app.actor_role` per transaction (`withUserContext()` in `src/lib/db.ts`); Supabase deployments swap `portal.current_user_id()` to `auth.uid()`.
+**RLS posture** (sql/002_rls.sql): investors see only their own rows; advisors see assigned investors plus fulfilment tables; admins see all; audit inserts are always permitted. **The service-role key bypasses RLS by design** — investor isolation is enforced at the application layer (`requireApiUser`, tier checks, ownership filters on every read/write), with the SQL-level policies remaining in force as defense in depth for any non-service-role access path (e.g. PostgREST with anon/authenticated keys). Supabase deployments may swap `portal.current_user_id()` to `auth.uid()` to share the policies with PostgREST sessions.
 
-### Production on Supabase — Supavisor pooling (required)
-
-The app runtime NEVER connects to the direct `db.<project-ref>.supabase.co` host — it is IPv6-only (unreachable from IPv4-only hosts), bypasses pooling and burns the connection budget. Per Supabase's guidance for Prisma at runtime, use the **Supavisor transaction pooler on port 6543**:
-
-```
-DATABASE_URL="postgresql://postgres.<project-ref>:<password>@aws-0-<region>.pooler.supabase.com:6543/postgres?pgbouncer=true&connection_limit=1"
-DIRECT_URL="postgresql://postgres.<project-ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres"
-```
-
-- **`DATABASE_URL` — runtime (transaction pooler, :6543).** `pgbouncer=true` is required: transaction mode has no prepared statements, so Prisma disables them (the interactive transactions used by `withUserContext()` keep working). Keep `connection_limit=1` for serverless / auto-scaling deployments; a single dedicated server may use 5–10.
-- **`DIRECT_URL` — CLI only (session pooler, :5432).** Used by `prisma db push` / `prisma migrate` and `psql` for the DDL above. With IPv6 or the IPv4 add-on the direct host `db.<project-ref>.supabase.co:5432` (username `postgres`) also works — but only here, never for the runtime.
-- Copy both strings verbatim from **Supabase Dashboard → Connect** (Transaction pooler / Session pooler); the username is `postgres.<project-ref>` on both poolers.
-- When deploying, switch the prisma datasource accordingly (the exact block is also in the `prisma/schema.prisma` header):
-
-```prisma
-datasource db {
-  provider  = "postgresql"
-  url       = env("DATABASE_URL")   // runtime — Supavisor transaction pooler (:6543)
-  directUrl = env("DIRECT_URL")     // migrations & db push — session pooler (:5432) / direct
-}
-```
-
-`src/lib/db.ts` warns at boot if `DATABASE_URL` still points at the direct `db.*` host. On non-Supabase Postgres, set both variables to the same direct connection string (`pgbouncer=true` is only needed behind a transaction pooler).
+**Concurrency note:** PostgREST has no multi-statement transactions — code that previously relied on `db.$transaction` runs sequential statements in the same order (marked `// NOTE: sequential` in source). Business-critical sequences (order → status event → revenue recognition) remain guarded by their read-then-write checks and full audit trails.
 
 ## Admin Internal System (`/admin`)
 
@@ -123,7 +112,7 @@ In-app centre + toasts/modals, Web Push (desktop + installed PWA, via Service Wo
 - **Real-time**: SSE at `/api/notifications/stream` feeds the toaster; the Service Worker (`public/sw.js`) receives push with the tab closed, mirrors into IndexedDB (offline notification centre), deep-links clicks and background-syncs read state.
 - **Email**: exact institutional templates ship in code (`src/lib/notifications/email-defaults.ts`; exported to `download/murivest-email-templates/`), over your own SMTP; admins manage overrides + version history in Admin → Notifications → Email templates. Digest batches: `POST /api/cron/digest` with `Authorization: Bearer $CRON_SECRET`.
 - **Admin operations** (`/admin/notifications`): delivery ledger with per-investor status, bounce/failure rates, manual redelivery, suppression overrides, controlled announcements (segments, fully audited; `broadcast.send` permission).
-- **Schema**: Prisma models in `prisma/schema.prisma`; production DDL + RLS in `sql/006_notifications_schema.sql` (also `download/murivest-notifications-schema.sql`).
+- **Schema**: row types in `src/lib/db-types.ts`; production DDL + RLS in `sql/006_notifications_schema.sql` (also `download/murivest-notifications-schema.sql`).
 - **Push keys**: `node scripts/generate-vapid-keys.mjs --write` → `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` (mailto:) in env. Production must set `CRON_SECRET` for the digest endpoint.
 
 ## Sanity — the content source
@@ -176,14 +165,15 @@ The public landing page is a long-form sales letter (Ogilvy-style structure, NEP
 ## Deployment & operations
 
 ```bash
-cp .env.example .env              # fill in
+cp .env.example .env              # fill in NEXT_PUBLIC_SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY
 bun install                       # or npm/yarn/pnpm
-bun run db:push                   # dev runtime schema
+# Provision Supabase once (see Database above): run sql/001…006 in the SQL
+# editor or psql, expose `portal` + `audit` schemas, then bootstrap:
 node scripts/create-admin.mjs office@murivest.com 'Full Name' 'Passw0rd!'   # first admin
 bun run dev                       # dev server
 ```
 
-Production runtime (`bun run start`, standalone server) — export the environment before starting: `DATABASE_URL` (Supavisor **transaction pooler :6543** — see *Database* above), `DIRECT_URL`, `SESSION_SECRET` / `APP_ENCRYPTION_KEY`, `SANITY_*`, `SMTP_*`, `VAPID_*`, `CRON_SECRET`. `NEXT_PUBLIC_*` values are inlined at build time — set them before `next build`. See `.env.example` for the full annotated template.
+Production runtime (`bun run start`, standalone server) — export the environment before starting: `NEXT_PUBLIC_SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` (see *Database* above), `SESSION_SECRET` / `APP_ENCRYPTION_KEY`, `SANITY_*`, `SMTP_*`, `VAPID_*`, `CRON_SECRET`. `NEXT_PUBLIC_*` values are inlined at build time — set them before `next build`. See `.env.example` for the full annotated template.
 
 Staff desk operations (verification, tier assignment, order/payment progression, advisor replies, mandate activation, document grants) run through the guarded, audit-logged `POST /api/staff` dispatcher — integrate with existing Murivest fulfilment workflows, or call from internal tooling as an admin/advisor session.
 

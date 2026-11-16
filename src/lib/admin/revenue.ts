@@ -348,7 +348,8 @@ export async function revenueBreakdowns(period: Period): Promise<{
   byInvestorType: BreakdownRow[]
   byGeography: BreakdownRow[]
   byAdvisor: BreakdownRow[]
-  byAdvisorRaw: {advisorId: string; valueUsd: number; count: number}[]
+  /** Grouped before name resolution — label is the advisor user id (or 'unattributed'). */
+  byAdvisorRaw: BreakdownRow[]
   monthly: {label: string; grossUsd: number; netUsd: number}[]
 }> {
   const events = await enrichedEvents(period)

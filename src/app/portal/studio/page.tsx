@@ -59,7 +59,7 @@ export default async function StudioPage({
     if (o) {
       prefill = {
         price: o.indicativePrice?.amount ?? 0,
-        currency: o.indicativePrice?.currency || 'USD',
+        currency: (o.indicativePrice?.currency || 'USD') as ScenarioInputs['currency'],
         grossIncome: o.financials?.grossIncomeAnnual ?? 0,
         opex: o.financials?.operatingExpenses ?? 0,
         exitCapRatePct: o.financials?.netYieldPct ?? 0,

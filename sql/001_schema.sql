@@ -21,9 +21,9 @@
 -- by Sanity document id (`sanity_*` columns).
 --
 -- Ids are TEXT (cuid generated application-side). Apply with psql:
---   psql "$DATABASE_URL" -f sql/001_schema.sql
---   psql "$DATABASE_URL" -f sql/002_rls.sql
---   psql "$DATABASE_URL" -f sql/003_functions.sql
+--   psql "$DIRECT_URL" -f sql/001_schema.sql
+--   psql "$DIRECT_URL" -f sql/002_rls.sql
+--   psql "$DIRECT_URL" -f sql/003_functions.sql
 -- =============================================================================
 
 BEGIN;

@@ -26,10 +26,10 @@ export default async function AdminCommunicationsPage({
       <CommunicationsWorkspace
         initialThreads={threads.map((t) => ({
           ...t,
-          createdAt: t.createdAt.toISOString(),
-          updatedAt: t.updatedAt.toISOString(),
-          lastActivityAt: t.lastActivityAt.toISOString(),
-          messages: t.messages.map((m) => ({...m, createdAt: m.createdAt.toISOString()})),
+          createdAt: t.createdAt,
+          updatedAt: t.updatedAt,
+          lastActivityAt: t.lastActivityAt,
+          messages: t.messages.map((m) => ({...m, createdAt: m.createdAt})),
         }))}
         canReply={actx.can('communications.reply')}
         initialStatus={status}

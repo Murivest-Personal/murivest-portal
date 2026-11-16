@@ -18,8 +18,8 @@ export default async function AdminSettingsPage() {
       />
       <SettingsWorkspace
         initial={{
-          staff: data.staff.map((s) => ({...s, lastLoginAt: s.lastLoginAt?.toISOString() ?? null})),
-          settings: data.settings.map((s) => ({...s, updatedAt: s.updatedAt.toISOString()})),
+          staff: data.staff.map((s) => ({...s, lastLoginAt: s.lastLoginAt ?? null})),
+          settings: data.settings.map((s) => ({...s, updatedAt: s.updatedAt})),
           integrationStatus: data.integrationStatus,
           can: {
             manage: actx.can('settings.manage'),

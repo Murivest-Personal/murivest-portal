@@ -1,7 +1,7 @@
 import {NextResponse, type NextRequest} from 'next/server'
 import {supabase, unwrapNullable} from '@/lib/supabase'
 import {magicLinkSchema} from '@/lib/validation'
-import {issueAuthToken} from '@/lib/auth/tokens'
+import {issueAuthToken, consumeAuthToken} from '@/lib/auth/tokens'
 import {createSession} from '@/lib/auth/login'
 import {sendMail} from '@/lib/mail'
 import {parseBody, ok, clientMeta} from '@/lib/api'

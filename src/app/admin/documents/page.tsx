@@ -18,9 +18,9 @@ export default async function AdminDocumentsPage() {
       />
       <DocumentsWorkspace
         data={{
-          grants: data.grants.map((g) => ({...g, expiresAt: g.expiresAt?.toISOString() ?? null, createdAt: g.createdAt.toISOString()})),
-          requests: data.requests.map((r) => ({...r, createdAt: r.createdAt.toISOString()})),
-          accessLogs: data.accessLogs.map((l) => ({...l, createdAt: l.createdAt.toISOString()})),
+          grants: data.grants.map((g) => ({...g, expiresAt: g.expiresAt ?? null, createdAt: g.createdAt})),
+          requests: data.requests.map((r) => ({...r, createdAt: r.createdAt})),
+          accessLogs: data.accessLogs.map((l) => ({...l, createdAt: l.createdAt})),
           metas: data.metas,
           sanityDocs: data.sanityDocs as never,
           sanityConfigured: data.sanityConfigured,

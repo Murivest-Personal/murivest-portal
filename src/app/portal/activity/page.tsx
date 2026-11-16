@@ -103,25 +103,25 @@ export default async function ActivityPage() {
     ...orders.map((o) => ({kind: 'order', ref: o.reference, title: o.briefTitle, detail: o.customScope, occurredAt: o.createdAt, status: o.status})),
     ...enquiries.map((e) => ({kind: 'enquiry', ref: e.id, title: e.subject, detail: e.message.slice(0, 140), occurredAt: e.updatedAt, status: e.status})),
     ...mandates.map((m) => ({kind: 'mandate', ref: m.reference, title: m.title, occurredAt: m.updatedAt, status: m.status})),
-    ...docLogs.map((d) => ({kind: 'document_view', ref: d.sanityDocumentId, title: d.documentTitle || 'Document access', detail: `${d.action} · logged`, occurredAt: d.createdAt.toISOString()})),
-    ...securityEvents.map((s) => ({kind: 'security_event', ref: s.id, title: `${s.type.replace(/_/g, ' ')}${s.ip ? ` · ${s.ip}` : ''}`, occurredAt: s.createdAt.toISOString()})),
-    ...scenarios.map((s) => ({kind: 'scenario', ref: s.id, title: s.name, detail: s.opportunityTitle, occurredAt: s.updatedAt.toISOString()})),
+    ...docLogs.map((d) => ({kind: 'document_view', ref: d.sanityDocumentId, title: d.documentTitle || 'Document access', detail: `${d.action} · logged`, occurredAt: d.createdAt})),
+    ...securityEvents.map((s) => ({kind: 'security_event', ref: s.id, title: `${s.type.replace(/_/g, ' ')}${s.ip ? ` · ${s.ip}` : ''}`, occurredAt: s.createdAt})),
+    ...scenarios.map((s) => ({kind: 'scenario', ref: s.id, title: s.name, detail: s.opportunityTitle, occurredAt: s.updatedAt})),
   ].sort((a, b) => (a.occurredAt < b.occurredAt ? 1 : -1)).slice(0, 120)
 
   const threads: ThreadRow[] = enquiries.map((e) => ({
     id: e.id,
     subject: e.subject,
     status: e.status,
-    createdAt: e.createdAt.toISOString(),
-    updatedAt: e.updatedAt.toISOString(),
+    createdAt: e.createdAt,
+    updatedAt: e.updatedAt,
     sanityOpportunityId: e.sanityOpportunityId,
     opportunityTitle: e.opportunityTitle,
-    messages: e.messages.map((m) => ({
+    messages: (messagesByEnquiry.get(e.id) ?? []).map((m) => ({
       id: m.id,
       senderType: m.senderType,
       body: m.body,
-      createdAt: m.createdAt.toISOString(),
-      readAt: m.readAt?.toISOString() ?? null,
+      createdAt: m.createdAt,
+      readAt: m.readAt ?? null,
     })),
   }))
 
