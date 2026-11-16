@@ -14,8 +14,14 @@ export function useAuthModal() {
 }
 
 /** Page-level provider — one modal instance, triggered from any CTA. */
-export function AuthModalProvider({children}: {children: React.ReactNode}) {
-  const [open, setOpen] = useState(false)
+export function AuthModalProvider({
+  children,
+  authRequired = false,
+}: {
+  children: React.ReactNode
+  authRequired?: boolean
+}) {
+  const [open, setOpen] = useState(() => authRequired)
   const [mode, setMode] = useState<Mode>('signin')
 
   const openModal = useCallback((m: Mode = 'signin') => {

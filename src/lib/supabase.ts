@@ -3,7 +3,7 @@ import {createClient, type PostgrestError, type SupabaseClient} from '@supabase/
 // ============================================================================
 // Murivest Private Capital Portal — Supabase client (server-only)
 // ----------------------------------------------------------------------------
-// Replaces the former Prisma runtime (src/lib/db.ts). All DB access goes
+// All DB access goes
 // through this client, created with the SERVICE ROLE key: server-side reads
 // and writes only, full-privilege. It MUST never be imported from client
 // components and the key must never appear in the browser bundle.

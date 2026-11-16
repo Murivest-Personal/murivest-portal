@@ -223,9 +223,11 @@ const AUDIENCES = [
   },
 ]
 
-export default async function LandingPage() {
+export default async function LandingPage({searchParams}: {searchParams: Promise<{auth?: string}>}) {
+  const {auth} = await searchParams
   const [ctx, landing] = await Promise.all([getAuthContext(), getLandingContent()])
   const isAuthenticated = !!ctx
+  const authRequired = auth === 'required'
 
   const hero = {
     eyebrow: landing?.heroEyebrow || 'Murivest Group · Private & Institutional Capital · Nairobi | London',
@@ -255,7 +257,7 @@ export default async function LandingPage() {
   const signatureName = directorName || 'The Director'
 
   return (
-    <AuthModalProvider>
+    <AuthModalProvider authRequired={authRequired}>
       <script type="application/ld+json" dangerouslySetInnerHTML={{__html: JSON.stringify(jsonLd)}} />
       <script type="application/ld+json" dangerouslySetInnerHTML={{__html: JSON.stringify(faqJsonLd)}} />
       <div className="flex min-h-screen flex-col bg-background">
