@@ -1,6 +1,6 @@
 import {type NextRequest, NextResponse} from 'next/server'
 import {z} from 'zod'
-import {db} from '@/lib/db'
+import {supabase, unwrap, toCamel, toCamelList, unwrapCount, toSnake, nowIso, newId} from '@/lib/supabase'
 import {requireAdminApi, isAdminResponse, type AdminContext} from '@/lib/admin/rbac'
 import {fail, parseBody} from '@/lib/api'
 import {audit} from '@/lib/auth/audit'
@@ -8,6 +8,7 @@ import {EMAIL_TEMPLATES} from '@/lib/notifications/email-defaults'
 import {saveEmailTemplate} from '@/lib/notifications/templates'
 import {sendDigestForUser, suppressPendingDeliveries, redeliverEmail, dispatchAnnouncement} from '@/lib/notifications/dispatch'
 import {resolvePeriod} from '@/lib/admin/period'
+import type {EmailTemplateRow, EmailTemplateVersionRow, InvestorProfileRow, NotificationAnnouncementRow, NotificationDeliveryRow, NotificationRow, UserRow} from '@/lib/db-types'
 
 /**
  * Admin Notification Operations API (spec §8).
@@ -39,13 +40,26 @@ export async function GET(req: NextRequest) {
 
   if (scope === 'stats') {
     const since = period.from
-    const deliveries = await db.notificationDelivery.findMany({
-      where: {createdAt: {gte: since}},
-      select: {channel: true, status: true, notification: {select: {userId: true}}},
-    })
+    // NOTE: Prisma `include` → separate queries + JS join (no PostgREST embeds).
+    const deliveryRows = unwrap<Pick<NotificationDeliveryRow, 'notification_id' | 'channel' | 'status'>[]>(
+      await supabase
+        .from('notification_deliveries')
+        .select('notification_id, channel, status')
+        .gte('created_at', since.toISOString()),
+      'adminNotifications.deliveries',
+    )
+    const notificationIds = [...new Set(deliveryRows.map((d) => d.notification_id))]
+    const notificationRows = notificationIds.length
+      ? unwrap<Pick<NotificationRow, 'id' | 'user_id'>[]>(
+          await supabase.from('notifications').select('id, user_id').in('id', notificationIds),
+          'adminNotifications.deliveryNotifications',
+        )
+      : []
+    const userIdByNotification = new Map(notificationRows.map((n) => [n.id, n.user_id]))
+    const deliveries = deliveryRows.map((d) => ({channel: d.channel, status: d.status, userId: userIdByNotification.get(d.notification_id) ?? ''}))
     // Advisors see aggregate stats for their assigned investors only.
     const assignedIds = actx.advisorId ? await assignedInvestorIds(actx) : null
-    const scoped = assignedIds ? deliveries.filter((d) => assignedIds.has(d.notification.userId)) : deliveries
+    const scoped = assignedIds ? deliveries.filter((d) => assignedIds.has(d.userId)) : deliveries
 
     const byChannel: Record<string, Record<string, number>> = {}
     for (const d of scoped) {
@@ -57,10 +71,10 @@ export async function GET(req: NextRequest) {
     const emailSent = byChannel.email?.sent ?? 0
 
     const [announcements, digestQueued, pushSubscriptions, emailSuppressedInvestors] = await Promise.all([
-      db.notificationAnnouncement.count(),
-      db.notificationDelivery.count({where: {channel: 'email', status: 'digest_queued'}}),
-      db.pushSubscription.count({where: {revokedAt: null}}),
-      db.notificationSetting.count({where: {emailSuppressed: true}}),
+      supabase.from('notification_announcements').select('*', {count: 'exact', head: true}).then((r) => unwrapCount(r, 'adminNotifications.announcementCount')),
+      supabase.from('notification_deliveries').select('*', {count: 'exact', head: true}).eq('channel', 'email').eq('status', 'digest_queued').then((r) => unwrapCount(r, 'adminNotifications.digestQueuedCount')),
+      supabase.from('push_subscriptions').select('*', {count: 'exact', head: true}).is('revoked_at', null).then((r) => unwrapCount(r, 'adminNotifications.pushCount')),
+      supabase.from('notification_settings').select('*', {count: 'exact', head: true}).eq('email_suppressed', true).then((r) => unwrapCount(r, 'adminNotifications.suppressedCount')),
     ])
 
     return NextResponse.json({
@@ -85,54 +99,68 @@ export async function GET(req: NextRequest) {
     const status = sp.get('status')
     const take = Math.min(Number.parseInt(sp.get('take') ?? '60', 10) || 60, 200)
 
-    const where: Record<string, unknown> = {
-      ...(channel ? {channel} : {}),
-      ...(status ? {status} : {}),
-    }
-    const rows = await db.notificationDelivery.findMany({
-      where: where as never,
-      orderBy: {createdAt: 'desc'},
-      take,
-      include: {
-        notification: {
-          select: {id: true, userId: true, title: true, category: true, event: true, priority: true, link: true},
-        },
-      },
-    })
-    const assignedIds = actx.advisorId ? await assignedInvestorIds(actx) : null
-    const scoped = assignedIds ? rows.filter((r) => assignedIds.has(r.notification.userId)) : rows
+    let deliveryQuery = supabase.from('notification_deliveries').select('*')
+    if (channel) deliveryQuery = deliveryQuery.eq('channel', channel)
+    if (status) deliveryQuery = deliveryQuery.eq('status', status)
 
-    const users = await db.user.findMany({
-      where: {id: {in: [...new Set(scoped.map((r) => r.notification.userId))]}},
-      select: {id: true, email: true, fullName: true},
-    })
-    const userMap = new Map(users.map((u) => [u.id, u]))
+    const deliveryRows = unwrap<NotificationDeliveryRow[]>(
+      await deliveryQuery.order('created_at', {ascending: false}).limit(take),
+      'adminNotifications.deliveryLog',
+    )
+    // NOTE: Prisma `include` → separate queries + JS join (no PostgREST embeds).
+    const notificationIds = [...new Set(deliveryRows.map((r) => r.notification_id))]
+    const notificationRows = notificationIds.length
+      ? unwrap<Pick<NotificationRow, 'id' | 'user_id' | 'title' | 'category' | 'event' | 'priority' | 'link'>[]>(
+          await supabase.from('notifications').select('id, user_id, title, category, event, priority, link').in('id', notificationIds),
+          'adminNotifications.deliveryNotifications',
+        )
+      : []
+    const notificationById = new Map(notificationRows.map((n) => [n.id, toCamel(n)]))
+
+    const assignedIds = actx.advisorId ? await assignedInvestorIds(actx) : null
+    const scoped = assignedIds
+      ? deliveryRows.filter((r) => notificationById.get(r.notification_id) && assignedIds.has(notificationById.get(r.notification_id)!.userId))
+      : deliveryRows.filter((r) => notificationById.get(r.notification_id))
+
+    const userIds = [...new Set(scoped.map((r) => notificationById.get(r.notification_id)!.userId))]
+    const userRows = userIds.length
+      ? unwrap<Pick<UserRow, 'id' | 'email' | 'full_name'>[]>(
+          await supabase.from('users').select('id, email, full_name').in('id', userIds),
+          'adminNotifications.users',
+        )
+      : []
+    const userMap = new Map(userRows.map((u) => [u.id, toCamel(u)]))
 
     return NextResponse.json({
       ok: true,
-      log: scoped.map((r) => ({
-        id: r.id,
-        notificationId: r.notificationId,
-        channel: r.channel,
-        status: r.status,
-        address: r.address,
-        detail: r.detail,
-        sentAt: r.sentAt,
-        createdAt: r.createdAt,
-        notification: r.notification,
-        userId: r.notification.userId,
-        investor: userMap.get(r.notification.userId)
-          ? {email: userMap.get(r.notification.userId)!.email, name: userMap.get(r.notification.userId)!.fullName}
-          : null,
-      })),
+      log: scoped.map((r) => {
+        const notification = notificationById.get(r.notification_id)!
+        const investor = userMap.get(notification.userId)
+        return {
+          id: r.id,
+          notificationId: r.notification_id,
+          channel: r.channel,
+          status: r.status,
+          address: r.address,
+          detail: r.detail,
+          sentAt: r.sent_at,
+          createdAt: r.created_at,
+          notification,
+          userId: notification.userId,
+          investor: investor ? {email: investor.email, name: investor.fullName} : null,
+        }
+      }),
     })
   }
 
   if (scope === 'templates') {
-    const rows = await db.emailTemplate.findMany({orderBy: {key: 'asc'}})
-    const rowMap = new Map(rows.map((r) => [r.key, r]))
+    const templateRows = unwrap<EmailTemplateRow[]>(
+      await supabase.from('email_templates').select('*').order('key', {ascending: true}),
+      'adminNotifications.templates',
+    )
+    const rowMap = new Map(templateRows.map((r) => [r.key, toCamel(r)]))
     const templates = Object.values(EMAIL_TEMPLATES).map((fallback) => {
-      const row = rowMap.get(fallback.key)
+      const row = rowMap.get(fallback.key) ?? null
       return {
         key: fallback.key,
         category: fallback.category,
@@ -147,21 +175,37 @@ export async function GET(req: NextRequest) {
         placeholders: fallback.placeholders,
       }
     })
-    const versions = await db.emailTemplateVersion.findMany({
-      orderBy: {createdAt: 'desc'},
-      take: 50,
-      include: {template: {select: {key: true}}},
-    })
+    const versionRows = unwrap<EmailTemplateVersionRow[]>(
+      await supabase.from('email_template_versions').select('*').order('created_at', {ascending: false}).limit(50),
+      'adminNotifications.templateVersions',
+    )
+    // NOTE: Prisma `include` (template key) → separate query + JS join.
+    const templateIds = [...new Set(versionRows.map((v) => v.template_id))]
+    const keyRows = templateIds.length
+      ? unwrap<Pick<EmailTemplateRow, 'id' | 'key'>[]>(
+          await supabase.from('email_templates').select('id, key').in('id', templateIds),
+          'adminNotifications.templateKeys',
+        )
+      : []
+    const keyById = new Map(keyRows.map((t) => [t.id, t.key]))
+    const versions = versionRows.map((v) => ({...toCamel(v), template: {key: keyById.get(v.template_id) ?? null}}))
     return NextResponse.json({ok: true, templates, versions})
   }
 
   if (scope === 'announcements') {
-    const rows = await db.notificationAnnouncement.findMany({
-      orderBy: {createdAt: 'desc'},
-      take: 30,
-    })
-    const senders = await db.user.findMany({where: {id: {in: [...new Set(rows.map((r) => r.createdById))]}}, select: {id: true, fullName: true, email: true}})
-    const senderMap = new Map(senders.map((s) => [s.id, s]))
+    const announcementRows = unwrap<NotificationAnnouncementRow[]>(
+      await supabase.from('notification_announcements').select('*').order('created_at', {ascending: false}).limit(30),
+      'adminNotifications.announcements',
+    )
+    const rows = toCamelList(announcementRows)
+    const senderIds = [...new Set(rows.map((r) => r.createdById).filter((x): x is string => Boolean(x)))]
+    const senderRows = senderIds.length
+      ? unwrap<Pick<UserRow, 'id' | 'full_name' | 'email'>[]>(
+          await supabase.from('users').select('id, full_name, email').in('id', senderIds),
+          'adminNotifications.senders',
+        )
+      : []
+    const senderMap = new Map(senderRows.map((s) => [s.id, toCamel(s)]))
     return NextResponse.json({
       ok: true,
       announcements: rows.map((r) => ({
@@ -232,11 +276,14 @@ export async function POST(req: NextRequest) {
     if (isAdminResponse(guard)) return guard.response
     const userId = str(payload, 'userId')
     if (!userId) return fail('userId required.')
-    await db.notificationSetting.upsert({
-      where: {userId},
-      create: {userId, emailSuppressed: false},
-      update: {emailSuppressed: false},
-    })
+    unwrap(
+      await supabase
+        .from('notification_settings')
+        .upsert([toSnake({id: newId(), userId, emailSuppressed: false, createdAt: nowIso(), updatedAt: nowIso()})], {
+          onConflict: 'user_id',
+        }),
+      'adminNotifications.unsuppress',
+    )
     await audit({actorId: guard.actx.auth.user.id, actorType: 'admin', action: 'notification.email_unsuppressed', entity: 'user', entityId: userId})
     return NextResponse.json({ok: true})
   }
@@ -272,7 +319,10 @@ export async function POST(req: NextRequest) {
     if (isAdminResponse(guard)) return guard.response
     const key = str(payload, 'key')
     if (!key) return fail('key required.')
-    await db.emailTemplate.deleteMany({where: {key}})
+    unwrap(
+      await supabase.from('email_templates').delete().eq('key', key),
+      'adminNotifications.templateReset',
+    )
     await audit({actorId: guard.actx.auth.user.id, actorType: 'admin', action: 'notification.template_reset', entity: 'email_template', entityId: key})
     return NextResponse.json({ok: true})
   }
@@ -312,6 +362,10 @@ export async function POST(req: NextRequest) {
 
 async function assignedInvestorIds(actx: AdminContext): Promise<Set<string>> {
   if (!actx.advisorId) return new Set()
-  const profiles = await db.investorProfile.findMany({where: {advisorId: actx.auth.user.id}, select: {userId: true}})
-  return new Set(profiles.map((p) => p.userId))
+  const profiles = unwrap<Pick<InvestorProfileRow, 'user_id'>[]>(
+    await supabase.from('investor_profiles').select('user_id').eq('advisor_id', actx.auth.user.id),
+    'adminNotifications.assignedInvestors',
+  )
+  return new Set(profiles.map((p) => p.user_id))
 }
+

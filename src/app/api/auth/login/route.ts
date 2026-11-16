@@ -1,11 +1,12 @@
 import {NextResponse, type NextRequest} from 'next/server'
-import {db} from '@/lib/db'
+import {supabase, unwrap, unwrapNullable} from '@/lib/supabase'
 import {loginSchema} from '@/lib/validation'
 import {verifyPassword} from '@/lib/auth/password'
 import {createSession} from '@/lib/auth/login'
 import {audit, securityEvent} from '@/lib/auth/audit'
 import {parseBody, fail, clientMeta} from '@/lib/api'
 import {challengeCookieValue} from '@/lib/auth/challenge'
+import type {InvestorProfileRow, UserRow} from '@/lib/db-types'
 
 const MAX_FAILED = 8
 const LOCK_MINUTES = 15
@@ -16,40 +17,48 @@ export async function POST(req: NextRequest) {
   const {email, password} = parsed.data
   const meta = clientMeta(req)
 
-  const user = await db.user.findUnique({where: {email}, include: {profile: true}})
-  if (!user || !user.passwordHash) {
+  const userRow = unwrapNullable<UserRow>(
+    await supabase.from('users').select('*').eq('email', email).maybeSingle(),
+    'user.byEmail',
+  )
+  if (!userRow || !userRow.password_hash) {
     await securityEvent({type: 'login_failed', ...meta, detail: {email, reason: 'unknown_account'}})
     return fail('Invalid email or password.', 401)
   }
-  if (user.lockedUntil && user.lockedUntil > new Date()) {
+  if (userRow.locked_until && new Date(userRow.locked_until) > new Date()) {
     return fail('Account temporarily locked after repeated failed attempts. Try again shortly or reset your password.', 423)
   }
-  if (user.status !== 'active') {
+  if (userRow.status !== 'active') {
     return fail('This account is not active. Contact office@murivest.com.', 403)
   }
 
-  const valid = await verifyPassword(password, user.passwordHash)
+  const valid = await verifyPassword(password, userRow.password_hash)
   if (!valid) {
-    const failed = user.failedLogins + 1
-    await db.user.update({
-      where: {id: user.id},
-      data: {
-        failedLogins: failed,
-        ...(failed >= MAX_FAILED ? {lockedUntil: new Date(Date.now() + LOCK_MINUTES * 60 * 1000)} : {}),
-      },
-    })
-    await securityEvent({userId: user.id, type: 'login_failed', ...meta})
+    const failed = userRow.failed_logins + 1
+    unwrap<null>(
+      await supabase
+        .from('users')
+        .update({
+          failed_logins: failed,
+          ...(failed >= MAX_FAILED
+            ? {locked_until: new Date(Date.now() + LOCK_MINUTES * 60 * 1000).toISOString()}
+            : {}),
+        })
+        .eq('id', userRow.id),
+      'user.recordFailedLogin',
+    )
+    await securityEvent({userId: userRow.id, type: 'login_failed', ...meta})
     if (failed >= MAX_FAILED) {
-      await securityEvent({userId: user.id, type: 'account_locked', ...meta})
+      await securityEvent({userId: userRow.id, type: 'account_locked', ...meta})
     }
     return fail('Invalid email or password.', 401)
   }
 
   // MFA: issue a short-lived challenge cookie; the session is created only
   // after the TOTP step succeeds.
-  if (user.mfaEnabled) {
+  if (userRow.mfa_enabled) {
     const res = NextResponse.json({ok: true, mfaRequired: true})
-    res.cookies.set('mvr_challenge', challengeCookieValue(user.id), {
+    res.cookies.set('mvr_challenge', challengeCookieValue(userRow.id), {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
@@ -59,12 +68,18 @@ export async function POST(req: NextRequest) {
     return res
   }
 
-  const {token} = await createSession(user.id, req)
-  await audit({actorId: user.id, action: 'auth.login', entity: 'user', entityId: user.id, ...meta})
+  // NOTE: Prisma `include: {profile: true}` replaced by a follow-up query.
+  const profileRow = unwrapNullable<InvestorProfileRow>(
+    await supabase.from('investor_profiles').select('*').eq('user_id', userRow.id).maybeSingle(),
+    'profile.byUser',
+  )
+
+  const {token} = await createSession(userRow.id, req)
+  await audit({actorId: userRow.id, action: 'auth.login', entity: 'user', entityId: userRow.id, ...meta})
 
   const res = NextResponse.json({
     ok: true,
-    next: user.profile && user.profile.onboardingStep >= 4 ? 'portal' : 'onboarding',
+    next: profileRow && profileRow.onboarding_step >= 4 ? 'portal' : 'onboarding',
   })
   res.cookies.set('mvr_session', token, {
     httpOnly: true,

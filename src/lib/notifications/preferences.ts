@@ -1,4 +1,5 @@
-import {db} from '@/lib/db'
+import {supabase, unwrap, unwrapNullable, toCamel, toCamelList} from '@/lib/supabase'
+import type {NotificationPreferenceRow, NotificationSettingRow} from '@/lib/db-types'
 import {
   CHANNELS,
   DEFAULT_CHANNEL_MATRIX,
@@ -29,10 +30,13 @@ export interface EffectivePreferences {
 }
 
 export async function getEffectivePreferences(userId: string): Promise<EffectivePreferences> {
-  const [settings, rows] = await Promise.all([
-    db.notificationSetting.findUnique({where: {userId}}),
-    db.notificationPreference.findMany({where: {userId}}),
+  const [settingsRes, prefsRes] = await Promise.all([
+    supabase.from('notification_settings').select('*').eq('user_id', userId).maybeSingle(),
+    supabase.from('notification_preferences').select('*').eq('user_id', userId),
   ])
+  const settingsRow = unwrapNullable<NotificationSettingRow>(settingsRes, 'notificationSettings.byUser')
+  const rows = toCamelList(unwrap<NotificationPreferenceRow[]>(prefsRes, 'notificationPreferences.byUser'))
+  const settings = settingsRow ? toCamel(settingsRow) : null
 
   const explicit: EffectivePreferences['explicit'] = {
     in_app: {},

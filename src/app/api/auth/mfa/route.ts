@@ -2,7 +2,7 @@ import {NextResponse, type NextRequest} from 'next/server'
 import {cookies} from 'next/headers'
 import {z} from 'zod'
 import QRCode from 'qrcode'
-import {db} from '@/lib/db'
+import {supabase, unwrap, unwrapNullable} from '@/lib/supabase'
 import {totpSchema} from '@/lib/validation'
 import {generateTotpSecret, verifyTotp, encryptSecret, decryptSecret} from '@/lib/auth/totp'
 import {verifyChallengeCookie, MFA_CHALLENGE_COOKIE} from '@/lib/auth/challenge'
@@ -11,6 +11,7 @@ import {audit, securityEvent, notify} from '@/lib/auth/audit'
 import {verifyPassword} from '@/lib/auth/password'
 import {parseBody, fail, clientMeta} from '@/lib/api'
 import {requireApiUser, isResponse} from '@/lib/auth/context'
+import type {InvestorProfileRow, UserRow} from '@/lib/db-types'
 
 /**
  * MFA actions:
@@ -31,17 +32,23 @@ export async function POST(req: NextRequest) {
     if (!userId) return fail('Your sign-in challenge expired. Sign in again.', 401)
     const parsed = totpSchema.safeParse(body)
     if (!parsed.success) return fail(parsed.error.issues[0]?.message || 'Enter the 6-digit code.')
-    const user = await db.user.findUnique({where: {id: userId}})
-    if (!user?.mfaEnabled || !user.mfaSecretEnc) return fail('MFA is not enabled on this account.', 400)
-    const secret = decryptSecret(user.mfaSecretEnc)
+    const userRow = unwrapNullable<UserRow>(
+      await supabase.from('users').select('*').eq('id', userId).maybeSingle(),
+      'user.byId',
+    )
+    if (!userRow?.mfa_enabled || !userRow.mfa_secret_enc) return fail('MFA is not enabled on this account.', 400)
+    const secret = decryptSecret(userRow.mfa_secret_enc)
     if (!secret || !verifyTotp(secret, parsed.data.code)) {
       await securityEvent({userId, type: 'login_failed', ...meta, detail: {stage: 'mfa'}})
       return fail('Invalid authentication code.', 401)
     }
     const {token} = await createSession(userId, req)
     await audit({actorId: userId, action: 'auth.login.mfa', entity: 'user', entityId: userId, ...meta})
-    const profile = await db.investorProfile.findUnique({where: {userId}})
-    const res = NextResponse.json({ok: true, next: profile && profile.onboardingStep >= 4 ? 'portal' : 'onboarding'})
+    const profileRow = unwrapNullable<InvestorProfileRow>(
+      await supabase.from('investor_profiles').select('*').eq('user_id', userId).maybeSingle(),
+      'investorProfile.byUser',
+    )
+    const res = NextResponse.json({ok: true, next: profileRow && profileRow.onboarding_step >= 4 ? 'portal' : 'onboarding'})
     res.cookies.set('mvr_session', token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
@@ -63,7 +70,13 @@ export async function POST(req: NextRequest) {
     const {secret, otpauthUrl} = generateTotpSecret()
     const qr = await QRCode.toDataURL(otpauthUrl(ctx.user.email), {margin: 1, width: 220, color: {dark: '#0E2A1C', light: '#FFFFFF'}})
     // stash the candidate secret (encrypted) pending confirmation
-    await db.user.update({where: {id: ctx.user.id}, data: {mfaSecretEnc: encryptSecret(secret), mfaEnabled: false}})
+    unwrap<null>(
+      await supabase
+        .from('users')
+        .update({mfa_secret_enc: encryptSecret(secret), mfa_enabled: false})
+        .eq('id', ctx.user.id),
+      'user.mfaSetup',
+    )
     return NextResponse.json({ok: true, qr, otpauth: otpauthUrl(ctx.user.email), secret})
   }
 
@@ -73,7 +86,10 @@ export async function POST(req: NextRequest) {
     if (!ctx.user.mfaSecretEnc) return fail('Start MFA setup first.')
     const secret = decryptSecret(ctx.user.mfaSecretEnc)
     if (!secret || !verifyTotp(secret, parsed.data.code)) return fail('That code did not match. Try the next one.')
-    await db.user.update({where: {id: ctx.user.id}, data: {mfaEnabled: true}})
+    unwrap<null>(
+      await supabase.from('users').update({mfa_enabled: true}).eq('id', ctx.user.id),
+      'user.mfaEnable',
+    )
     await securityEvent({userId: ctx.user.id, type: 'mfa_enabled', ...meta})
     await audit({actorId: ctx.user.id, action: 'auth.mfa_enabled', ...meta})
     return NextResponse.json({ok: true})
@@ -88,7 +104,10 @@ export async function POST(req: NextRequest) {
       const secret = decryptSecret(ctx.user.mfaSecretEnc)
       if (!secret || !verifyTotp(secret, parsed.data.code)) return fail('Invalid authentication code.', 401)
     }
-    await db.user.update({where: {id: ctx.user.id}, data: {mfaEnabled: false, mfaSecretEnc: null}})
+    unwrap<null>(
+      await supabase.from('users').update({mfa_enabled: false, mfa_secret_enc: null}).eq('id', ctx.user.id),
+      'user.mfaDisable',
+    )
     await securityEvent({userId: ctx.user.id, type: 'mfa_disabled', ...meta})
     await notify({userId: ctx.user.id, type: 'security', event: 'security.mfa_changed', title: 'Two-factor authentication disabled', body: 'MFA was disabled on your account. If you did not request this, contact us immediately.', emailVars: {alertTitle: 'Two-factor authentication disabled', alertDetail: 'MFA was disabled on your account. If you did not request this, contact us immediately.'}})
     return NextResponse.json({ok: true})

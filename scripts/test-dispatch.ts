@@ -9,18 +9,19 @@
  *
  * Run: bun run scripts/test-dispatch.ts <userId>
  */
-import {PrismaClient} from '@prisma/client'
-
-const prisma = new PrismaClient()
+import {supabase, nowIso, newId} from '../src/lib/supabase'
 
 async function show(label: string, notificationId: string) {
-  const deliveries = await prisma.notificationDelivery.findMany({
-    where: {notificationId},
-    orderBy: {createdAt: 'asc'},
-  })
+  const res = await supabase
+    .from('notification_deliveries')
+    .select('*')
+    .eq('notification_id', notificationId)
+    .order('created_at', {ascending: true})
+  if (res.error) throw new Error(`[db:deliveries.list] ${res.error.message}`)
+  const deliveries = res.data ?? []
   console.log(`\n[${label}] deliveries for ${notificationId}:`)
   for (const d of deliveries) {
-    console.log(`  ${d.channel.padEnd(7)} ${d.status.padEnd(13)} addr=${d.address ?? '-'} detail=${d.detail ?? '-'} msgId=${d.messageId ?? '-'}`)
+    console.log(`  ${d.channel.padEnd(7)} ${d.status.padEnd(13)} addr=${d.address ?? '-'} detail=${d.detail ?? '-'} msgId=${d.message_id ?? '-'}`)
   }
 }
 
@@ -48,16 +49,18 @@ async function main() {
   await show('order.delivered', r1.notificationId!)
 
   // --- 2. Digest path ------------------------------------------------------
-  await prisma.notificationSetting.upsert({
-    where: {userId},
-    create: {userId, digestEnabled: true},
-    update: {digestEnabled: true},
-  })
-  await prisma.notificationPreference.upsert({
-    where: {userId_channel_category: {userId, channel: 'email', category: 'system'}},
-    create: {userId, channel: 'email', category: 'system', enabled: true},
-    update: {enabled: true},
-  })
+  const digestOn = await supabase
+    .from('notification_settings')
+    .upsert([{id: newId(), user_id: userId, digest_enabled: true, created_at: nowIso(), updated_at: nowIso()}], {onConflict: 'user_id'})
+  if (digestOn.error) throw new Error(`[db:settings.digestOn] ${digestOn.error.message}`)
+  const emailPrefOn = await supabase
+    .from('notification_preferences')
+    .upsert(
+      [{id: newId(), user_id: userId, channel: 'email', category: 'system', enabled: true, created_at: nowIso(), updated_at: nowIso()}],
+      {onConflict: 'user_id,channel,category'},
+    )
+  if (emailPrefOn.error) throw new Error(`[db:preferences.emailOn] ${emailPrefOn.error.message}`)
+
   const r2 = await notifyUser({
     userId,
     title: 'Digest-eligible notice',
@@ -75,10 +78,18 @@ async function main() {
   await show('after digest', r2.notificationId!)
 
   // cleanup the test preference so defaults resume
-  await prisma.notificationPreference.deleteMany({where: {userId, channel: 'email', category: 'system'}})
+  const prefsCleanup = await supabase
+    .from('notification_preferences')
+    .delete()
+    .eq('user_id', userId)
+    .eq('channel', 'email')
+    .eq('category', 'system')
+  if (prefsCleanup.error) throw new Error(`[db:preferences.cleanup] ${prefsCleanup.error.message}`)
 
   // --- 3. Announcement -----------------------------------------------------
-  const admin = await prisma.user.findFirst({where: {role: 'admin'}, select: {id: true}})
+  const adminRes = await supabase.from('users').select('id').eq('role', 'admin').limit(1).maybeSingle()
+  if (adminRes.error) throw new Error(`[db:users.admin] ${adminRes.error.message}`)
+  const admin = adminRes.data
   if (admin) {
     const r3 = await dispatchAnnouncement({
       title: 'Dispatch engine test announcement',
@@ -88,13 +99,26 @@ async function main() {
       createdById: admin.id,
     })
     console.log('3) announcement →', r3)
-    const count = await prisma.notification.count({where: {announcementId: r3.announcementId}})
-    console.log(`   recipients with rows: ${count}`)
+    const recipients = await supabase
+      .from('notifications')
+      .select('*', {count: 'exact', head: true})
+      .eq('announcement_id', r3.announcementId)
+    if (recipients.error) throw new Error(`[db:notifications.recipients] ${recipients.error.message}`)
+    console.log(`   recipients with rows: ${recipients.count ?? 0}`)
   }
 
   // --- 4. Suppression / global switch sanity ------------------------------
-  const before = await prisma.notificationSetting.findUnique({where: {userId}})
-  await prisma.notificationSetting.upsert({where: {userId}, create: {userId, globalEnabled: false}, update: {globalEnabled: false}})
+  const beforeRes = await supabase
+    .from('notification_settings')
+    .select('global_enabled, digest_enabled')
+    .eq('user_id', userId)
+    .maybeSingle()
+  if (beforeRes.error) throw new Error(`[db:settings.before] ${beforeRes.error.message}`)
+  const before = beforeRes.data
+  const globalOff = await supabase
+    .from('notification_settings')
+    .upsert([{id: newId(), user_id: userId, global_enabled: false, created_at: nowIso(), updated_at: nowIso()}], {onConflict: 'user_id'})
+  if (globalOff.error) throw new Error(`[db:settings.globalOff] ${globalOff.error.message}`)
   const r4 = await notifyUser({
     userId,
     title: 'Should be fully suppressed',
@@ -104,7 +128,11 @@ async function main() {
     dedupeKey: `test.suppressed.${Date.now()}`,
   })
   console.log('4) global off (orders) →', r4)
-  await prisma.notificationSetting.update({where: {userId}, data: {globalEnabled: before?.globalEnabled ?? true, digestEnabled: before?.digestEnabled ?? false}})
+  const restore = await supabase
+    .from('notification_settings')
+    .update({global_enabled: before?.global_enabled ?? true, digest_enabled: before?.digest_enabled ?? false})
+    .eq('user_id', userId)
+  if (restore.error) throw new Error(`[db:settings.restore] ${restore.error.message}`)
 }
 
 main()
@@ -112,4 +140,3 @@ main()
     console.error(err)
     process.exit(1)
   })
-  .finally(() => prisma.$disconnect())

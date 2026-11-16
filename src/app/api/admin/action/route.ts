@@ -1,12 +1,27 @@
 import {NextResponse, type NextRequest} from 'next/server'
 import {z} from 'zod'
-import {db} from '@/lib/db'
+import {supabase, unwrap, unwrapNullable, toCamel, toSnake, nowIso, newId} from '@/lib/supabase'
 import {audit, notify, securityEvent} from '@/lib/auth/audit'
 import {hashPassword, passwordPolicyError} from '@/lib/auth/password'
 import {fail, clientMeta} from '@/lib/api'
 import {requireAdminApi, isAdminResponse, orderTransitionAllowed, isValidAdminRole, type AdminContext, type Permission} from '@/lib/admin/rbac'
 import {recogniseRevenue, applyRefundToLedger} from '@/lib/admin/revenue'
 import {dispatchAnnouncement} from '@/lib/notifications/dispatch'
+import type {
+  ContentMetaRow,
+  DocumentGrantRow,
+  DocumentRequestRow,
+  EnquiryRow,
+  InvestorProfileRow,
+  MandateRow,
+  OrderRow,
+  PaymentRow,
+  RefundAdjustmentRow,
+  SessionRow,
+  StaffProfileRow,
+  SystemSettingRow,
+  UserRow,
+} from '@/lib/db-types'
 
 /**
  * Admin write API — one guarded dispatcher for every mutation in the Admin
@@ -14,6 +29,10 @@ import {dispatchAnnouncement} from '@/lib/notifications/dispatch'
  * endpoint) with granular RBAC: every action checks its permission key,
  * writes an OrderStatusEvent / compliance record where applicable, notifies
  * the affected investor, and is audit-logged.
+ *
+ * Storage: Supabase service-role client (@/lib/supabase) — snake_case at the
+ * DB boundary, camelCase in the business logic below (toCamel/toSnake).
+ * Prisma relation `include`s are separate follow-up queries + JS joins.
  */
 const schema = z.object({
   action: z.string(),
@@ -45,8 +64,12 @@ export async function POST(req: NextRequest) {
     const {actx} = g
     const userId = str(p, 'userId')
     if (!userId) return fail('userId required.')
-    const before = await db.investorProfile.findUnique({where: {userId}})
-    if (!before) return fail('Investor not found.', 404)
+    const beforeRow = unwrapNullable<InvestorProfileRow>(
+      await supabase.from('investor_profiles').select('*').eq('user_id', userId).maybeSingle(),
+      'investor_profiles.get',
+    )
+    if (!beforeRow) return fail('Investor not found.', 404)
+    const before = toCamel(beforeRow)
 
     const data: Record<string, unknown> = {}
     for (const key of ['verificationStatus', 'kycStatus', 'amlStatus', 'accessTier', 'classification']) {
@@ -56,8 +79,11 @@ export async function POST(req: NextRequest) {
     if ('advisorId' in p) {
       const v = strOrNull(p, 'advisorId')
       if (v) {
-        const advisor = await db.user.findUnique({where: {id: v}})
-        if (!advisor || !['advisor', 'admin'].includes(advisor.role)) return fail('Advisor must be a staff member.')
+        const advisorRow = unwrapNullable<UserRow>(
+          await supabase.from('users').select('*').eq('id', v).maybeSingle(),
+          'users.get',
+        )
+        if (!advisorRow || !['advisor', 'admin'].includes(advisorRow.role)) return fail('Advisor must be a staff member.')
       }
       data.advisorId = v
     }
@@ -65,7 +91,14 @@ export async function POST(req: NextRequest) {
     if ('source' in p) data.source = strOrNull(p, 'source')
     if ('notes' in p) data.notes = strOrNull(p, 'notes')
 
-    await db.investorProfile.update({where: {userId}, data: data as never})
+    // Empty PATCH bodies are rejected by PostgREST — skip the no-op write.
+    // updated_at is maintained by the DB trigger — not set here.
+    if (Object.keys(data).length > 0) {
+      unwrap<null>(
+        await supabase.from('investor_profiles').update(toSnake(data)).eq('user_id', userId),
+        'investor_profiles.update',
+      )
+    }
 
     if (data.accessTier && data.accessTier !== before.accessTier) {
       await notify({userId, type: 'system', event: 'security.tier_changed', title: 'Access tier updated', body: `Your Murivest access tier is now ${(data.accessTier as string).replace('_', ' ')}. Sign in to review newly available material.`, link: '/portal', emailVars: {alertTitle: 'Access tier updated', alertDetail: `Your Murivest access tier is now ${(data.accessTier as string).replace('_', ' ')}. Newly available material can be reviewed when you next sign in.`}})
@@ -73,15 +106,16 @@ export async function POST(req: NextRequest) {
     if (data.kycStatus === 'approved' && before.kycStatus !== 'approved') {
       await notify({userId, type: 'system', event: 'security.verification_update', title: 'Verification approved', body: 'Your KYC verification is approved. Confidential opportunities and off-market material are now visible where permitted.', link: '/portal/discover', emailVars: {alertTitle: 'Verification approved', alertDetail: 'Your KYC verification is approved. Confidential opportunities and off-market material are now visible where permitted.'}})
     }
-    await db.complianceReview.create({
-      data: {
-        subjectUserId: userId,
-        reviewerId: actx.auth.user.id,
-        decision: 'note',
-        notes: 'Profile fields updated',
-        detail: {before: {verificationStatus: before.verificationStatus, kycStatus: before.kycStatus, amlStatus: before.amlStatus, accessTier: before.accessTier, advisorId: before.advisorId, ndaAccepted: before.ndaAccepted}, after: data} as never,
-      },
-    }).catch(() => {})
+    // best-effort compliance snapshot (was .catch(() => {}) in Prisma)
+    await supabase.from('compliance_reviews').insert({
+      id: newId(),
+      subject_user_id: userId,
+      reviewer_id: actx.auth.user.id,
+      decision: 'note',
+      notes: 'Profile fields updated',
+      detail: {before: {verificationStatus: before.verificationStatus, kycStatus: before.kycStatus, amlStatus: before.amlStatus, accessTier: before.accessTier, advisorId: before.advisorId, ndaAccepted: before.ndaAccepted}, after: data},
+      created_at: nowIso(),
+    }).then(() => undefined, () => undefined)
     await audit({actorId: actx.auth.user.id, actorType: 'admin', action: 'admin.investor_updated', entity: 'investor', entityId: userId, detail: data, ...meta})
     return NextResponse.json({ok: true})
   }
@@ -93,15 +127,30 @@ export async function POST(req: NextRequest) {
     const userId = str(p, 'userId')
     const reason = str(p, 'reason')
     if (!userId) return fail('userId required.')
-    const target = await db.user.findUnique({where: {id: userId}})
-    if (!target) return fail('Account not found.', 404)
+    const targetRow = unwrapNullable<UserRow>(
+      await supabase.from('users').select('*').eq('id', userId).maybeSingle(),
+      'users.get',
+    )
+    if (!targetRow) return fail('Account not found.', 404)
     const status = action === 'investor.freeze' ? 'suspended' : 'active'
-    await db.user.update({where: {id: userId}, data: {status: status as never}})
+    unwrap<null>(await supabase.from('users').update({status}).eq('id', userId), 'users.update')
     if (action === 'investor.freeze') {
-      await db.session.updateMany({where: {userId, revokedAt: null}, data: {revokedAt: new Date()}})
-      await db.complianceReview.create({
-        data: {subjectUserId: userId, reviewerId: actx.auth.user.id, decision: 'escalated', notes: reason ?? 'Account frozen', riskFlags: [{flag: 'account_frozen', severity: 'high'}] as never, detail: {status} as never},
-      }).catch(() => {})
+      // updateMany → filtered update: revoke every live session
+      unwrap<null>(
+        await supabase.from('sessions').update({revoked_at: nowIso()}).eq('user_id', userId).is('revoked_at', null),
+        'sessions.revokeAll',
+      )
+      // best-effort compliance record (was .catch(() => {}) in Prisma)
+      await supabase.from('compliance_reviews').insert({
+        id: newId(),
+        subject_user_id: userId,
+        reviewer_id: actx.auth.user.id,
+        decision: 'escalated',
+        notes: reason ?? 'Account frozen',
+        risk_flags: [{flag: 'account_frozen', severity: 'high'}],
+        detail: {status},
+        created_at: nowIso(),
+      }).then(() => undefined, () => undefined)
     }
     await securityEvent({userId, type: action === 'investor.freeze' ? 'account_locked' : 'login', ...meta, detail: {by: actx.auth.user.id, reason}})
     await audit({actorId: actx.auth.user.id, actorType: 'admin', action: `admin.${action.split('.')[1]}`, entity: 'user', entityId: userId, detail: {status, reason}, ...meta})
@@ -121,10 +170,24 @@ export async function POST(req: NextRequest) {
     const notes = str(p, 'notes')
     const riskFlags = Array.isArray(p.riskFlags) ? (p.riskFlags as unknown[]) : []
 
-    const before = await db.investorProfile.findUnique({where: {userId}})
-    await db.complianceReview.create({
-      data: {subjectUserId: userId, reviewerId: actx.auth.user.id, decision: decision as never, notes: notes ?? null, riskFlags: riskFlags as never, detail: {before: before ? {verificationStatus: before.verificationStatus, kycStatus: before.kycStatus, amlStatus: before.amlStatus, accessTier: before.accessTier} : null} as never},
-    })
+    const beforeRow = unwrapNullable<InvestorProfileRow>(
+      await supabase.from('investor_profiles').select('*').eq('user_id', userId).maybeSingle(),
+      'investor_profiles.get',
+    )
+    const before = beforeRow ? toCamel(beforeRow) : null
+    unwrap<null>(
+      await supabase.from('compliance_reviews').insert({
+        id: newId(),
+        subject_user_id: userId,
+        reviewer_id: actx.auth.user.id,
+        decision,
+        notes: notes ?? null,
+        risk_flags: riskFlags,
+        detail: {before: before ? {verificationStatus: before.verificationStatus, kycStatus: before.kycStatus, amlStatus: before.amlStatus, accessTier: before.accessTier} : null},
+        created_at: nowIso(),
+      }),
+      'compliance_reviews.create',
+    )
     await audit({actorId: actx.auth.user.id, actorType: 'admin', action: `admin.compliance_${decision}`, entity: 'investor', entityId: userId, detail: {notes, riskFlags}, ...meta})
     return NextResponse.json({ok: true})
   }
@@ -138,14 +201,28 @@ export async function POST(req: NextRequest) {
     const {actx} = g
     const orderId = str(p, 'orderId')
     if (!orderId) return fail('orderId required.')
-    const order = await db.order.findUnique({where: {id: orderId}})
-    if (!order) return fail('Order not found.', 404)
+    const orderRow = unwrapNullable<OrderRow>(
+      await supabase.from('orders').select('*').eq('id', orderId).maybeSingle(),
+      'orders.get',
+    )
+    if (!orderRow) return fail('Order not found.', 404)
+    const order = toCamel(orderRow)
     const assignedToId = strOrNull(p, 'assignedToId')
     if (assignedToId) {
-      const assignee = await db.user.findUnique({where: {id: assignedToId}})
-      if (!assignee || !['advisor', 'admin'].includes(assignee.role)) return fail('Assignee must be a staff member.')
+      const assigneeRow = unwrapNullable<UserRow>(
+        await supabase.from('users').select('*').eq('id', assignedToId).maybeSingle(),
+        'users.get',
+      )
+      if (!assigneeRow || !['advisor', 'admin'].includes(assigneeRow.role)) return fail('Assignee must be a staff member.')
     }
-    await db.order.update({where: {id: orderId}, data: {assignedToId}})
+    // undefined ⇒ "leave unchanged" (Prisma semantics); null ⇒ unassign
+    if (assignedToId !== undefined) {
+      // updated_at is maintained by the DB trigger — not set here.
+      unwrap<null>(
+        await supabase.from('orders').update({assigned_to_id: assignedToId}).eq('id', orderId),
+        'orders.update',
+      )
+    }
     if (assignedToId) {
       await notify({userId: assignedToId, type: 'system', title: `Order assigned — ${order.reference}`, body: `“${order.briefTitle}” has been assigned to you for fulfilment.`, link: `/admin/orders/${orderId}`})
     }
@@ -161,25 +238,42 @@ export async function POST(req: NextRequest) {
     const status = str(p, 'status')
     const note = str(p, 'note')
     if (!orderId || !status) return fail('orderId and status required.')
-    const order = await db.order.findUnique({where: {id: orderId}, include: {payments: true}})
-    if (!order) return fail('Order not found.', 404)
+    const orderRow = unwrapNullable<OrderRow>(
+      await supabase.from('orders').select('*').eq('id', orderId).maybeSingle(),
+      'orders.get',
+    )
+    if (!orderRow) return fail('Order not found.', 404)
+    const order = toCamel(orderRow)
     if (order.status === status) return fail('Order is already in that status.')
     if (!orderTransitionAllowed(order.status, status)) return fail(`Invalid transition: ${order.status} → ${status}.`)
 
     const data: Record<string, unknown> = {status}
-    if (status === 'delivered') data.deliveredAt = new Date()
-    if (status === 'closed') data.closedAt = new Date()
+    if (status === 'delivered') data.delivered_at = nowIso()
+    if (status === 'closed') data.closed_at = nowIso()
     if (status === 'cancelled') {
-      data.cancelledAt = new Date()
-      data.cancellationReason = note ?? 'Cancelled by Murivest'
+      data.cancelled_at = nowIso()
+      data.cancellation_reason = note ?? 'Cancelled by Murivest'
     }
     const trackingNumber = str(p, 'trackingNumber')
-    if (trackingNumber !== undefined) data.trackingNumber = trackingNumber
+    if (trackingNumber !== undefined) data.tracking_number = trackingNumber
     const deliveryDocumentId = str(p, 'deliveryDocumentId')
-    if (deliveryDocumentId !== undefined) data.deliveryDocumentId = deliveryDocumentId || null
+    if (deliveryDocumentId !== undefined) data.delivery_document_id = deliveryDocumentId || null
 
-    await db.order.update({where: {id: orderId}, data: data as never})
-    await db.orderStatusEvent.create({data: {orderId, fromStatus: order.status, toStatus: status, changedById: actx.auth.user.id, note: note ?? null}})
+    // NOTE: sequential (no multi-table tx over PostgREST) — order row, then status event.
+    // updated_at is maintained by the DB trigger — not set here.
+    unwrap<null>(await supabase.from('orders').update(data).eq('id', orderId), 'orders.update')
+    unwrap<null>(
+      await supabase.from('order_status_events').insert({
+        id: newId(),
+        order_id: orderId,
+        from_status: order.status,
+        to_status: status,
+        changed_by_id: actx.auth.user.id,
+        note: note ?? null,
+        created_at: nowIso(),
+      }),
+      'order_status_events.create',
+    )
 
     // Delivery: recognise revenue + release the brief into the investor's
     // secure data room when a Sanity document is attached.
@@ -187,9 +281,22 @@ export async function POST(req: NextRequest) {
       await recogniseRevenue(orderId, actx.auth.user.id)
       const docId = (deliveryDocumentId ?? order.deliveryDocumentId) || null
       if (docId) {
-        const existing = await db.documentGrant.findFirst({where: {sanityDocumentId: docId, userId: order.userId}})
+        const existing = unwrapNullable<DocumentGrantRow>(
+          await supabase.from('document_grants').select('*').eq('sanity_document_id', docId).eq('user_id', order.userId).maybeSingle(),
+          'document_grants.find',
+        )
         if (!existing) {
-          await db.documentGrant.create({data: {sanityDocumentId: docId, userId: order.userId, grantedById: actx.auth.user.id, permission: 'download'}})
+          unwrap<null>(
+            await supabase.from('document_grants').insert({
+              id: newId(),
+              sanity_document_id: docId,
+              user_id: order.userId,
+              granted_by_id: actx.auth.user.id,
+              permission: 'download',
+              created_at: nowIso(),
+            }),
+            'document_grants.create',
+          )
         }
       }
     }
@@ -233,21 +340,27 @@ export async function POST(req: NextRequest) {
     const {actx} = g
     const orderId = str(p, 'orderId')
     if (!orderId) return fail('orderId required.')
-    const order = await db.order.findUnique({where: {id: orderId}})
-    if (!order) return fail('Order not found.', 404)
+    const orderRow = unwrapNullable<OrderRow>(
+      await supabase.from('orders').select('*').eq('id', orderId).maybeSingle(),
+      'orders.get',
+    )
+    if (!orderRow) return fail('Order not found.', 404)
 
     const data: Record<string, unknown> = {}
     const priority = str(p, 'priority')
     if (priority && ['low', 'normal', 'high', 'urgent'].includes(priority)) data.priority = priority
     if ('dueAt' in p) {
       const v = str(p, 'dueAt')
-      data.dueAt = v ? new Date(v) : null
+      data.dueAt = v ? new Date(v).toISOString() : null
     }
     if ('advisorId' in p) {
       const v = strOrNull(p, 'advisorId')
       if (v) {
-        const advisor = await db.user.findUnique({where: {id: v}})
-        if (!advisor || !['advisor', 'admin'].includes(advisor.role)) return fail('Advisor must be a staff member.')
+        const advisorRow = unwrapNullable<UserRow>(
+          await supabase.from('users').select('*').eq('id', v).maybeSingle(),
+          'users.get',
+        )
+        if (!advisorRow || !['advisor', 'admin'].includes(advisorRow.role)) return fail('Advisor must be a staff member.')
       }
       data.advisorId = v
     }
@@ -255,7 +368,8 @@ export async function POST(req: NextRequest) {
     if ('transactionId' in p) data.transactionId = strOrNull(p, 'transactionId')
     if (Object.keys(data).length === 0) return fail('No changes supplied.')
 
-    await db.order.update({where: {id: orderId}, data: data as never})
+    // updated_at is maintained by the DB trigger — not set here.
+    unwrap<null>(await supabase.from('orders').update(toSnake(data)).eq('id', orderId), 'orders.update')
     await audit({actorId: actx.auth.user.id, actorType: 'admin', action: 'admin.order_updated', entity: 'order', entityId: orderId, detail: data, ...meta})
     return NextResponse.json({ok: true})
   }
@@ -271,20 +385,53 @@ export async function POST(req: NextRequest) {
     const decision = str(p, 'decision')
     const note = str(p, 'note')
     if (!paymentId || !decision || !['verified', 'rejected'].includes(decision)) return fail('paymentId and decision (verified|rejected) required.')
-    const payment = await db.payment.findUnique({where: {id: paymentId}, include: {order: true}})
-    if (!payment) return fail('Payment not found.', 404)
+    const paymentRow = unwrapNullable<PaymentRow>(
+      await supabase.from('payments').select('*').eq('id', paymentId).maybeSingle(),
+      'payments.get',
+    )
+    if (!paymentRow) return fail('Payment not found.', 404)
+    const payment = toCamel(paymentRow)
 
-    await db.payment.update({where: {id: paymentId}, data: {status: decision as never, verifiedById: actx.auth.user.id, verifiedAt: new Date(), note: note ?? null}})
+    unwrap<null>(
+      await supabase.from('payments').update({
+        status: decision,
+        verified_by_id: actx.auth.user.id,
+        verified_at: nowIso(),
+        note: note ?? null,
+      }).eq('id', paymentId),
+      'payments.update',
+    )
+
+    // Prisma include {order: true} → separate follow-up query (FK-backed).
+    const orderRow = unwrapNullable<OrderRow>(
+      await supabase.from('orders').select('*').eq('id', paymentRow.order_id).maybeSingle(),
+      'orders.get',
+    )
+    const order = toCamel(orderRow!)
 
     if (decision === 'verified') {
-      const order = payment.order
       if (['pending', 'awaiting_payment'].includes(order.status)) {
-        await db.order.update({where: {id: order.id}, data: {status: 'payment_confirmed'}})
-        await db.orderStatusEvent.create({data: {orderId: order.id, fromStatus: order.status, toStatus: 'payment_confirmed', changedById: actx.auth.user.id, note: 'Payment verified'}})
+        // NOTE: sequential (no multi-table tx over PostgREST).
+        unwrap<null>(
+          await supabase.from('orders').update({status: 'payment_confirmed'}).eq('id', order.id),
+          'orders.update',
+        )
+        unwrap<null>(
+          await supabase.from('order_status_events').insert({
+            id: newId(),
+            order_id: order.id,
+            from_status: order.status,
+            to_status: 'payment_confirmed',
+            changed_by_id: actx.auth.user.id,
+            note: 'Payment verified',
+            created_at: nowIso(),
+          }),
+          'order_status_events.create',
+        )
       }
-      await notify({userId: payment.userId, type: 'order_status', event: 'order.payment_confirmed', title: 'Payment confirmed', body: `Payment for ${payment.order.reference} is confirmed. Preparation of “${payment.order.briefTitle}” will now be scheduled.`, link: '/portal/orders', emailVars: {briefTitle: payment.order.briefTitle, orderRef: payment.order.reference, statusLabel: 'Payment confirmed', statusNote: `Payment for ${payment.order.reference} is confirmed. Preparation of “${payment.order.briefTitle}” will now be scheduled.`}})
+      await notify({userId: payment.userId, type: 'order_status', event: 'order.payment_confirmed', title: 'Payment confirmed', body: `Payment for ${order.reference} is confirmed. Preparation of “${order.briefTitle}” will now be scheduled.`, link: '/portal/orders', emailVars: {briefTitle: order.briefTitle, orderRef: order.reference, statusLabel: 'Payment confirmed', statusNote: `Payment for ${order.reference} is confirmed. Preparation of “${order.briefTitle}” will now be scheduled.`}})
     } else {
-      await notify({userId: payment.userId, type: 'order_status', event: 'order.payment_issue', title: 'Payment could not be verified', body: `We could not verify the payment for ${payment.order.reference}. ${note || 'Please contact your advisor.'}`, link: '/portal/orders', emailVars: {briefTitle: payment.order.briefTitle, orderRef: payment.order.reference, statusLabel: 'Payment could not be verified', statusNote: `We could not verify the payment for ${payment.order.reference}. ${note || 'Please contact your advisor.'}`}})
+      await notify({userId: payment.userId, type: 'order_status', event: 'order.payment_issue', title: 'Payment could not be verified', body: `We could not verify the payment for ${order.reference}. ${note || 'Please contact your advisor.'}`, link: '/portal/orders', emailVars: {briefTitle: order.briefTitle, orderRef: order.reference, statusLabel: 'Payment could not be verified', statusNote: `We could not verify the payment for ${order.reference}. ${note || 'Please contact your advisor.'}`}})
     }
     await audit({actorId: actx.auth.user.id, actorType: 'admin', action: 'admin.payment_verified', entity: 'payment', entityId: paymentId, detail: {decision, note}, ...meta})
     return NextResponse.json({ok: true})
@@ -301,11 +448,26 @@ export async function POST(req: NextRequest) {
     const reason = str(p, 'reason')
     const amountUsd = typeof p.amountUsd === 'number' ? (p.amountUsd as number) : undefined
     if (!orderId || !reason || !amountUsd || amountUsd <= 0) return fail('orderId, positive amountUsd and reason required.')
-    const order = await db.order.findUnique({where: {id: orderId}})
-    if (!order) return fail('Order not found.', 404)
-    const refund = await db.refundAdjustment.create({data: {orderId, amountUsd, amountKes: typeof p.amountKes === 'number' ? (p.amountKes as number) : 0, reason, requestedById: actx.auth.user.id}})
-    await audit({actorId: actx.auth.user.id, actorType: 'admin', action: 'admin.refund_proposed', entity: 'order', entityId: orderId, detail: {refundId: refund.id, amountUsd, reason}, ...meta})
-    return NextResponse.json({ok: true, refundId: refund.id})
+    const orderRow = unwrapNullable<OrderRow>(
+      await supabase.from('orders').select('*').eq('id', orderId).maybeSingle(),
+      'orders.get',
+    )
+    if (!orderRow) return fail('Order not found.', 404)
+    const refundId = newId()
+    unwrap<null>(
+      await supabase.from('refund_adjustments').insert({
+        id: refundId,
+        order_id: orderId,
+        amount_usd: amountUsd,
+        amount_kes: typeof p.amountKes === 'number' ? (p.amountKes as number) : 0,
+        reason,
+        requested_by_id: actx.auth.user.id,
+        created_at: nowIso(),
+      }),
+      'refund_adjustments.create',
+    )
+    await audit({actorId: actx.auth.user.id, actorType: 'admin', action: 'admin.refund_proposed', entity: 'order', entityId: orderId, detail: {refundId, amountUsd, reason}, ...meta})
+    return NextResponse.json({ok: true, refundId})
   }
 
   if (action === 'refund.review') {
@@ -315,14 +477,31 @@ export async function POST(req: NextRequest) {
     const refundId = str(p, 'refundId')
     const decision = str(p, 'decision')
     if (!refundId || !decision || !['approved', 'rejected'].includes(decision)) return fail('refundId and decision (approved|rejected) required.')
-    const refund = await db.refundAdjustment.findUnique({where: {id: refundId}, include: {order: true}})
-    if (!refund) return fail('Refund not found.', 404)
+    const refundRow = unwrapNullable<RefundAdjustmentRow>(
+      await supabase.from('refund_adjustments').select('*').eq('id', refundId).maybeSingle(),
+      'refund_adjustments.get',
+    )
+    if (!refundRow) return fail('Refund not found.', 404)
+    const refund = toCamel(refundRow)
     if (refund.status !== 'proposed') return fail('Only proposed refunds can be reviewed.')
 
-    await db.refundAdjustment.update({where: {id: refundId}, data: {status: decision === 'approved' ? 'approved' : 'rejected', reviewedById: actx.auth.user.id, reviewedAt: new Date()}})
+    unwrap<null>(
+      await supabase.from('refund_adjustments').update({
+        status: decision === 'approved' ? 'approved' : 'rejected',
+        reviewed_by_id: actx.auth.user.id,
+        reviewed_at: nowIso(),
+      }).eq('id', refundId),
+      'refund_adjustments.update',
+    )
     if (decision === 'approved') {
       await applyRefundToLedger(refund.orderId, refund.amountUsd)
-      await notify({userId: refund.order.userId, type: 'order_status', event: 'order.refund', title: 'Refund approved', body: `A refund of $${refund.amountUsd.toLocaleString('en-GB')} has been approved for ${refund.order.reference}. ${refund.reason}`, link: '/portal/orders', emailVars: {briefTitle: refund.order.briefTitle, orderRef: refund.order.reference, statusLabel: 'Refund approved', statusNote: `A refund of $${refund.amountUsd.toLocaleString('en-GB')} has been approved for ${refund.order.reference}. ${refund.reason}`}})
+      // Prisma include {order: true} → separate follow-up query (FK-backed).
+      const orderRow = unwrapNullable<OrderRow>(
+        await supabase.from('orders').select('*').eq('id', refundRow.order_id).maybeSingle(),
+        'orders.get',
+      )
+      const order = toCamel(orderRow!)
+      await notify({userId: order.userId, type: 'order_status', event: 'order.refund', title: 'Refund approved', body: `A refund of $${refund.amountUsd.toLocaleString('en-GB')} has been approved for ${order.reference}. ${refund.reason}`, link: '/portal/orders', emailVars: {briefTitle: order.briefTitle, orderRef: order.reference, statusLabel: 'Refund approved', statusNote: `A refund of $${refund.amountUsd.toLocaleString('en-GB')} has been approved for ${order.reference}. ${refund.reason}`}})
     }
     await audit({actorId: actx.auth.user.id, actorType: 'admin', action: `admin.refund_${decision}`, entity: 'order', entityId: refund.orderId, detail: {refundId, amountUsd: refund.amountUsd}, ...meta})
     return NextResponse.json({ok: true})
@@ -337,15 +516,19 @@ export async function POST(req: NextRequest) {
     const {actx} = g
     const mandateId = str(p, 'mandateId')
     if (!mandateId) return fail('mandateId required.')
-    const mandate = await db.mandate.findUnique({where: {id: mandateId}})
-    if (!mandate) return fail('Mandate not found.', 404)
+    const mandateRow = unwrapNullable<MandateRow>(
+      await supabase.from('mandates').select('*').eq('id', mandateId).maybeSingle(),
+      'mandates.get',
+    )
+    if (!mandateRow) return fail('Mandate not found.', 404)
+    const mandate = toCamel(mandateRow)
 
     const data: Record<string, unknown> = {}
     const status = str(p, 'status')
     if (status && ['draft', 'submitted', 'active', 'paused', 'closed', 'rejected'].includes(status)) {
       data.status = status
-      if (status === 'active' && !mandate.activatedAt) data.activatedAt = new Date()
-      if (status === 'closed') data.closedAt = new Date()
+      if (status === 'active' && !mandate.activatedAt) data.activatedAt = nowIso()
+      if (status === 'closed') data.closedAt = nowIso()
     }
     const stage = str(p, 'stage')
     if (stage && ['sourcing', 'qualification', 'matching', 'negotiation', 'closing', 'post_closing'].includes(stage)) data.stage = stage
@@ -354,12 +537,13 @@ export async function POST(req: NextRequest) {
     if ('nextAction' in p) data.nextAction = strOrNull(p, 'nextAction')
     if ('nextActionDue' in p) {
       const v = str(p, 'nextActionDue')
-      data.nextActionDue = v ? new Date(v) : null
+      data.nextActionDue = v ? new Date(v).toISOString() : null
     }
     if ('advisorId' in p) data.advisorId = strOrNull(p, 'advisorId')
     if (Object.keys(data).length === 0) return fail('No changes supplied.')
 
-    await db.mandate.update({where: {id: mandateId}, data: data as never})
+    // updated_at is maintained by the DB trigger — not set here.
+    unwrap<null>(await supabase.from('mandates').update(toSnake(data)).eq('id', mandateId), 'mandates.update')
     if (data.status === 'active' && mandate.status !== 'active') {
       await notify({userId: mandate.userId, type: 'mandate', event: 'mandate.status', title: `Mandate ${mandate.reference} activated`, body: 'Your acquisition mandate is live. Matching opportunities will be surfaced in Discover and communicated by your advisor.', link: '/portal/mandates', emailVars: {mandateRef: mandate.reference, mandateTitle: mandate.title, mandateStatus: 'activated', mandateNote: 'Your acquisition mandate is live. Matching opportunities will be surfaced in Discover and communicated by your advisor.'}})
     }
@@ -380,11 +564,33 @@ export async function POST(req: NextRequest) {
     const permission = str(p, 'permission') ?? 'view'
     const expiresAt = str(p, 'expiresAt')
     if (!sanityDocumentId || (!userId && !organisationId)) return fail('sanityDocumentId and userId or organisationId required.')
-    const existing = await db.documentGrant.findFirst({where: {sanityDocumentId, userId: userId ?? null, organisationId: organisationId ?? null}})
+    // findFirst({sanityDocumentId, userId: userId ?? null, organisationId: organisationId ?? null})
+    let grantQuery = supabase.from('document_grants').select('*').eq('sanity_document_id', sanityDocumentId)
+    grantQuery = userId ? grantQuery.eq('user_id', userId) : grantQuery.is('user_id', null)
+    grantQuery = organisationId ? grantQuery.eq('organisation_id', organisationId) : grantQuery.is('organisation_id', null)
+    const existing = unwrapNullable<DocumentGrantRow>(await grantQuery.maybeSingle(), 'document_grants.find')
     if (existing) {
-      await db.documentGrant.update({where: {id: existing.id}, data: {permission: permission as never, expiresAt: expiresAt ? new Date(expiresAt) : null}})
+      unwrap<null>(
+        await supabase.from('document_grants').update({
+          permission,
+          expires_at: expiresAt ? new Date(expiresAt).toISOString() : null,
+        }).eq('id', existing.id),
+        'document_grants.update',
+      )
     } else {
-      await db.documentGrant.create({data: {sanityDocumentId, userId: userId || null, organisationId: organisationId || null, grantedById: actx.auth.user.id, permission: permission as never, expiresAt: expiresAt ? new Date(expiresAt) : null}})
+      unwrap<null>(
+        await supabase.from('document_grants').insert({
+          id: newId(),
+          sanity_document_id: sanityDocumentId,
+          user_id: userId || null,
+          organisation_id: organisationId || null,
+          granted_by_id: actx.auth.user.id,
+          permission,
+          expires_at: expiresAt ? new Date(expiresAt).toISOString() : null,
+          created_at: nowIso(),
+        }),
+        'document_grants.create',
+      )
     }
     if (userId) {
       const docTitle = str(p, 'title')
@@ -400,9 +606,13 @@ export async function POST(req: NextRequest) {
     const {actx} = g
     const grantId = str(p, 'grantId')
     if (!grantId) return fail('grantId required.')
-    const grant = await db.documentGrant.findUnique({where: {id: grantId}})
-    if (!grant) return fail('Grant not found.', 404)
-    await db.documentGrant.delete({where: {id: grantId}})
+    const grantRow = unwrapNullable<DocumentGrantRow>(
+      await supabase.from('document_grants').select('*').eq('id', grantId).maybeSingle(),
+      'document_grants.get',
+    )
+    if (!grantRow) return fail('Grant not found.', 404)
+    const grant = toCamel(grantRow)
+    unwrap<null>(await supabase.from('document_grants').delete().eq('id', grantId), 'document_grants.delete')
     await audit({actorId: actx.auth.user.id, actorType: 'admin', action: 'admin.document_revoked', entity: 'document', entityId: grant.sanityDocumentId, detail: {userId: grant.userId, organisationId: grant.organisationId}, ...meta})
     return NextResponse.json({ok: true})
   }
@@ -414,9 +624,17 @@ export async function POST(req: NextRequest) {
     const requestId = str(p, 'requestId')
     const status = str(p, 'status')
     if (!requestId || !status || !['submitted', 'in_review', 'ready', 'declined'].includes(status)) return fail('requestId and a valid status required.')
-    const request = await db.documentRequest.findUnique({where: {id: requestId}})
-    if (!request) return fail('Request not found.', 404)
-    await db.documentRequest.update({where: {id: requestId}, data: {status: status as never}})
+    const requestRow = unwrapNullable<DocumentRequestRow>(
+      await supabase.from('document_requests').select('*').eq('id', requestId).maybeSingle(),
+      'document_requests.get',
+    )
+    if (!requestRow) return fail('Request not found.', 404)
+    const request = toCamel(requestRow)
+    // updated_at is maintained by the DB trigger — not set here.
+    unwrap<null>(
+      await supabase.from('document_requests').update({status}).eq('id', requestId),
+      'document_requests.update',
+    )
     if (status === 'ready') {
       await notify({userId: request.userId, type: 'document', event: 'document.request_ready', title: 'Requested materials are ready', body: 'Your document request has been fulfilled — see the secure Document Room.', link: '/portal/documents', emailVars: {documentTitle: request.subject, documentNote: ' — your requested materials'}})
     } else if (status === 'declined') {
@@ -450,11 +668,29 @@ export async function POST(req: NextRequest) {
     if (Object.keys(data).length === 0) return fail('No changes supplied.')
     data.updatedById = actx.auth.user.id
 
-    const existing = await db.contentMeta.findUnique({where: {contentType_sanityId: {contentType, sanityId}}})
+    // compound unique (contentType, sanityId) — note: table name is SINGULAR
+    const existing = unwrapNullable<ContentMetaRow>(
+      await supabase.from('content_meta').select('*').eq('content_type', contentType).eq('sanity_id', sanityId).maybeSingle(),
+      'content_meta.find',
+    )
     if (existing) {
-      await db.contentMeta.update({where: {id: existing.id}, data: data as never})
+      // updated_at is maintained by the DB trigger — not set here.
+      unwrap<null>(
+        await supabase.from('content_meta').update(toSnake(data)).eq('id', existing.id),
+        'content_meta.update',
+      )
     } else {
-      await db.contentMeta.create({data: {contentType, sanityId, ...((data ?? {}) as Record<string, unknown>) as never}})
+      unwrap<null>(
+        await supabase.from('content_meta').insert({
+          id: newId(),
+          content_type: contentType,
+          sanity_id: sanityId,
+          ...toSnake(data),
+          created_at: nowIso(),
+          updated_at: nowIso(),
+        }),
+        'content_meta.create',
+      )
     }
     await audit({actorId: actx.auth.user.id, actorType: 'admin', action: 'admin.content_meta_upserted', entity: contentType, entityId: sanityId, detail: data, ...meta})
     return NextResponse.json({ok: true})
@@ -472,11 +708,29 @@ export async function POST(req: NextRequest) {
     if (!status || !['live', 'paused', 'archived'].includes(status)) return fail('A valid status required.')
     let count = 0
     for (const sanityId of ids.slice(0, 200)) {
-      const existing = await db.contentMeta.findUnique({where: {contentType_sanityId: {contentType, sanityId}}})
+      const existing = unwrapNullable<ContentMetaRow>(
+        await supabase.from('content_meta').select('*').eq('content_type', contentType).eq('sanity_id', sanityId).maybeSingle(),
+        'content_meta.find',
+      )
       if (existing) {
-        await db.contentMeta.update({where: {id: existing.id}, data: {status: status as never, updatedById: actx.auth.user.id}})
+        // updated_at is maintained by the DB trigger — not set here.
+        unwrap<null>(
+          await supabase.from('content_meta').update({status, updated_by_id: actx.auth.user.id}).eq('id', existing.id),
+          'content_meta.update',
+        )
       } else {
-        await db.contentMeta.create({data: {contentType, sanityId, status: status as never, updatedById: actx.auth.user.id}})
+        unwrap<null>(
+          await supabase.from('content_meta').insert({
+            id: newId(),
+            content_type: contentType,
+            sanity_id: sanityId,
+            status,
+            updated_by_id: actx.auth.user.id,
+            created_at: nowIso(),
+            updated_at: nowIso(),
+          }),
+          'content_meta.create',
+        )
       }
       count += 1
     }
@@ -494,14 +748,37 @@ export async function POST(req: NextRequest) {
     const enquiryId = str(p, 'enquiryId')
     const body = str(p, 'body')
     if (!enquiryId || !body) return fail('enquiryId and body required.')
-    const thread = await db.enquiry.findUnique({where: {id: enquiryId}})
-    if (!thread) return fail('Thread not found.', 404)
+    const threadRow = unwrapNullable<EnquiryRow>(
+      await supabase.from('enquiries').select('*').eq('id', enquiryId).maybeSingle(),
+      'enquiries.get',
+    )
+    if (!threadRow) return fail('Thread not found.', 404)
+    const thread = toCamel(threadRow)
     if (actx.advisorId) {
-      const profile = await db.investorProfile.findUnique({where: {userId: thread.userId}})
+      const profileRow = unwrapNullable<InvestorProfileRow>(
+        await supabase.from('investor_profiles').select('*').eq('user_id', thread.userId).maybeSingle(),
+        'investor_profiles.get',
+      )
+      const profile = profileRow ? toCamel(profileRow) : null
       if (profile?.advisorId !== actx.auth.user.id) return fail('This investor is not assigned to you.', 403)
     }
-    await db.message.create({data: {userId: thread.userId, senderType: 'advisor', senderId: actx.auth.user.id, enquiryId, body}})
-    await db.enquiry.update({where: {id: enquiryId}, data: {status: 'responded'}})
+    unwrap<null>(
+      await supabase.from('messages').insert({
+        id: newId(),
+        user_id: thread.userId,
+        sender_type: 'advisor',
+        sender_id: actx.auth.user.id,
+        enquiry_id: enquiryId,
+        body,
+        created_at: nowIso(),
+      }),
+      'messages.create',
+    )
+    // updated_at is maintained by the DB trigger — not set here.
+    unwrap<null>(
+      await supabase.from('enquiries').update({status: 'responded'}).eq('id', enquiryId),
+      'enquiries.update',
+    )
     await notify({userId: thread.userId, type: 'message', event: 'message.reply', title: 'Reply from your Murivest advisor', body: body.slice(0, 120), link: '/portal/activity', emailVars: {advisorName: actx.auth.user.fullName || 'Your Murivest advisor', messagePreview: body.slice(0, 160)}})
     await audit({actorId: actx.auth.user.id, actorType: 'admin', action: 'admin.message_replied', entity: 'enquiry', entityId: enquiryId, ...meta})
     return NextResponse.json({ok: true})
@@ -513,9 +790,16 @@ export async function POST(req: NextRequest) {
     const {actx} = g
     const enquiryId = str(p, 'enquiryId')
     if (!enquiryId) return fail('enquiryId required.')
-    const thread = await db.enquiry.findUnique({where: {id: enquiryId}})
-    if (!thread) return fail('Thread not found.', 404)
-    await db.enquiry.update({where: {id: enquiryId}, data: {status: 'closed'}})
+    const threadRow = unwrapNullable<EnquiryRow>(
+      await supabase.from('enquiries').select('*').eq('id', enquiryId).maybeSingle(),
+      'enquiries.get',
+    )
+    if (!threadRow) return fail('Thread not found.', 404)
+    // updated_at is maintained by the DB trigger — not set here.
+    unwrap<null>(
+      await supabase.from('enquiries').update({status: 'closed'}).eq('id', enquiryId),
+      'enquiries.update',
+    )
     await audit({actorId: actx.auth.user.id, actorType: 'admin', action: 'admin.enquiry_closed', entity: 'enquiry', entityId: enquiryId, ...meta})
     return NextResponse.json({ok: true})
   }
@@ -534,7 +818,18 @@ export async function POST(req: NextRequest) {
     if (!entityType || !entityId || !body) return fail('entityType, entityId and body required.')
     if (!['staff', 'admins'].includes(visibility)) return fail('Invalid visibility.')
     if (visibility === 'admins' && actx.role !== 'super_admin') return fail('Only super administrators may post admin-only notes.', 403)
-    await db.internalNote.create({data: {entityType, entityId, authorId: actx.auth.user.id, body, visibility: visibility as never}})
+    unwrap<null>(
+      await supabase.from('internal_notes').insert({
+        id: newId(),
+        entity_type: entityType,
+        entity_id: entityId,
+        author_id: actx.auth.user.id,
+        body,
+        visibility,
+        created_at: nowIso(),
+      }),
+      'internal_notes.create',
+    )
     await audit({actorId: actx.auth.user.id, actorType: 'admin', action: 'admin.note_created', entity: entityType, entityId, detail: {visibility}, ...meta})
     return NextResponse.json({ok: true})
   }
@@ -586,21 +881,42 @@ export async function POST(req: NextRequest) {
     if (!isValidAdminRole(adminRole)) return fail('Invalid admin role.')
     const policy = passwordPolicyError(password)
     if (policy) return fail(policy)
-    if (await db.user.findUnique({where: {email: email.toLowerCase()}})) return fail('An account with this email already exists.', 409)
+    const dupeRow = unwrapNullable<UserRow>(
+      await supabase.from('users').select('*').eq('email', email.toLowerCase()).maybeSingle(),
+      'users.byEmail',
+    )
+    if (dupeRow) return fail('An account with this email already exists.', 409)
 
-    const user = await db.user.create({
-      data: {
+    const userId = newId()
+    unwrap<null>(
+      await supabase.from('users').insert({
+        id: userId,
         email: email.toLowerCase(),
-        fullName,
-        passwordHash: await hashPassword(password),
+        full_name: fullName,
+        password_hash: await hashPassword(password),
         role: adminRole === 'advisor' ? 'advisor' : 'admin',
-        emailVerifiedAt: new Date(),
-      },
-    })
-    await db.staffProfile.create({data: {userId: user.id, adminRole, title: str(p, 'title') ?? null, team: str(p, 'team') ?? null}})
-    await securityEvent({userId: user.id, type: 'login', ...meta, detail: {created: adminRole}})
-    await audit({actorId: actx.auth.user.id, actorType: 'admin', action: 'admin.staff_created', entity: 'user', entityId: user.id, detail: {email, adminRole}, ...meta})
-    return NextResponse.json({ok: true, userId: user.id})
+        email_verified_at: nowIso(),
+        created_at: nowIso(),
+        updated_at: nowIso(),
+      }),
+      'users.create',
+    )
+    unwrap<null>(
+      await supabase.from('staff_profiles').insert({
+        id: newId(),
+        user_id: userId,
+        admin_role: adminRole,
+        title: str(p, 'title') ?? null,
+        team: str(p, 'team') ?? null,
+        is_active: true,
+        created_at: nowIso(),
+        updated_at: nowIso(),
+      }),
+      'staff_profiles.create',
+    )
+    await securityEvent({userId, type: 'login', ...meta, detail: {created: adminRole}})
+    await audit({actorId: actx.auth.user.id, actorType: 'admin', action: 'admin.staff_created', entity: 'user', entityId: userId, detail: {email, adminRole}, ...meta})
+    return NextResponse.json({ok: true, userId})
   }
 
   if (action === 'staff.update') {
@@ -609,9 +925,18 @@ export async function POST(req: NextRequest) {
     const {actx} = g
     const userId = str(p, 'userId')
     if (!userId) return fail('userId required.')
-    const target = await db.user.findUnique({where: {id: userId}, include: {profile: true}})
-    if (!target || !['advisor', 'admin'].includes(target.role)) return fail('Staff member not found.', 404)
-    if (target.profile) return fail('This account belongs to an investor, not staff.', 400)
+    const targetRow = unwrapNullable<UserRow>(
+      await supabase.from('users').select('*').eq('id', userId).maybeSingle(),
+      'users.get',
+    )
+    if (!targetRow || !['advisor', 'admin'].includes(targetRow.role)) return fail('Staff member not found.', 404)
+    // Prisma include {profile: true} → separate follow-up query: staff
+    // accounts must not have an investor profile.
+    const investorProfile = unwrapNullable<InvestorProfileRow>(
+      await supabase.from('investor_profiles').select('*').eq('user_id', userId).maybeSingle(),
+      'investor_profiles.get',
+    )
+    if (investorProfile) return fail('This account belongs to an investor, not staff.', 400)
 
     const data: Record<string, unknown> = {}
     const adminRole = str(p, 'adminRole')
@@ -624,18 +949,44 @@ export async function POST(req: NextRequest) {
     if ('isActive' in p) data.isActive = bool(p, 'isActive') ?? true
     if (Object.keys(data).length === 0) return fail('No changes supplied.')
 
-    const profile = await db.staffProfile.findUnique({where: {userId}})
-    if (profile) {
-      await db.staffProfile.update({where: {userId}, data: data as never})
+    const staffRow = unwrapNullable<StaffProfileRow>(
+      await supabase.from('staff_profiles').select('*').eq('user_id', userId).maybeSingle(),
+      'staff_profiles.get',
+    )
+    if (staffRow) {
+      // updated_at is maintained by the DB trigger — not set here.
+      unwrap<null>(
+        await supabase.from('staff_profiles').update(toSnake(data)).eq('user_id', userId),
+        'staff_profiles.update',
+      )
       if (data.adminRole) {
-        await db.user.update({where: {id: userId}, data: {role: data.adminRole === 'advisor' ? 'advisor' : 'admin'}})
+        unwrap<null>(
+          await supabase.from('users').update({role: data.adminRole === 'advisor' ? 'advisor' : 'admin'}).eq('id', userId),
+          'users.update',
+        )
       }
     } else {
-      await db.staffProfile.create({data: {userId, adminRole: (data.adminRole as string) ?? (target.role === 'admin' ? 'super_admin' : 'advisor'), title: (data.title as string) ?? null, team: (data.team as string) ?? null, isActive: (data.isActive as boolean) ?? true}})
+      unwrap<null>(
+        await supabase.from('staff_profiles').insert({
+          id: newId(),
+          user_id: userId,
+          admin_role: (data.adminRole as string) ?? (targetRow.role === 'admin' ? 'super_admin' : 'advisor'),
+          title: (data.title as string) ?? null,
+          team: (data.team as string) ?? null,
+          is_active: (data.isActive as boolean) ?? true,
+          created_at: nowIso(),
+          updated_at: nowIso(),
+        }),
+        'staff_profiles.create',
+      )
     }
     // Deactivated staff lose their sessions immediately.
     if (data.isActive === false) {
-      await db.session.updateMany({where: {userId, revokedAt: null}, data: {revokedAt: new Date()}})
+      // updateMany → filtered update: revoke every live session
+      unwrap<null>(
+        await supabase.from('sessions').update({revoked_at: nowIso()}).eq('user_id', userId).is('revoked_at', null),
+        'sessions.revokeAll',
+      )
     }
     await audit({actorId: actx.auth.user.id, actorType: 'admin', action: 'admin.staff_updated', entity: 'user', entityId: userId, detail: data, ...meta})
     return NextResponse.json({ok: true})
@@ -655,11 +1006,35 @@ export async function POST(req: NextRequest) {
     const description = str(p, 'description')
     const value = ('value' in p ? p.value : undefined) ?? null
 
-    const existing = await db.systemSetting.findUnique({where: {key}})
+    const existing = unwrapNullable<SystemSettingRow>(
+      await supabase.from('system_settings').select('*').eq('key', key).maybeSingle(),
+      'system_settings.get',
+    )
     if (existing) {
-      await db.systemSetting.update({where: {id: existing.id}, data: {value: value as never, category: category as never, description: description ?? existing.description ?? null, updatedById: actx.auth.user.id}})
+      // updated_at is maintained by the DB trigger — not set here.
+      unwrap<null>(
+        await supabase.from('system_settings').update({
+          value,
+          category,
+          description: description ?? existing.description ?? null,
+          updated_by_id: actx.auth.user.id,
+        }).eq('id', existing.id),
+        'system_settings.update',
+      )
     } else {
-      await db.systemSetting.create({data: {key, value: value as never, category: category as never, description: description ?? null, updatedById: actx.auth.user.id}})
+      unwrap<null>(
+        await supabase.from('system_settings').insert({
+          id: newId(),
+          key,
+          value,
+          category,
+          description: description ?? null,
+          updated_by_id: actx.auth.user.id,
+          created_at: nowIso(),
+          updated_at: nowIso(),
+        }),
+        'system_settings.create',
+      )
     }
     await audit({actorId: actx.auth.user.id, actorType: 'admin', action: 'admin.setting_upserted', entity: 'setting', entityId: key, detail: {value, category}, ...meta})
     return NextResponse.json({ok: true})
@@ -674,11 +1049,17 @@ export async function POST(req: NextRequest) {
     const {actx} = g
     const sessionId = str(p, 'sessionId')
     if (!sessionId) return fail('sessionId required.')
-    const session = await db.session.findUnique({where: {id: sessionId}})
-    if (!session) return fail('Session not found.', 404)
-    await db.session.update({where: {id: sessionId}, data: {revokedAt: new Date()}})
-    await securityEvent({userId: session.userId, type: 'session_revoked', ...meta, detail: {by: actx.auth.user.id}})
-    await audit({actorId: actx.auth.user.id, actorType: 'admin', action: 'admin.session_revoked', entity: 'session', entityId: sessionId, detail: {user: session.userId}, ...meta})
+    const sessionRow = unwrapNullable<SessionRow>(
+      await supabase.from('sessions').select('*').eq('id', sessionId).maybeSingle(),
+      'sessions.get',
+    )
+    if (!sessionRow) return fail('Session not found.', 404)
+    unwrap<null>(
+      await supabase.from('sessions').update({revoked_at: nowIso()}).eq('id', sessionId),
+      'sessions.update',
+    )
+    await securityEvent({userId: sessionRow.user_id, type: 'session_revoked', ...meta, detail: {by: actx.auth.user.id}})
+    await audit({actorId: actx.auth.user.id, actorType: 'admin', action: 'admin.session_revoked', entity: 'session', entityId: sessionId, detail: {user: sessionRow.user_id}, ...meta})
     return NextResponse.json({ok: true})
   }
 

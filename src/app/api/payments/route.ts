@@ -1,9 +1,10 @@
 import {NextResponse, type NextRequest} from 'next/server'
-import {db} from '@/lib/db'
+import {supabase, unwrap, unwrapNullable, toCamel, nowIso, newId} from '@/lib/supabase'
 import {mpesaConfirmationSchema, wireConfirmationSchema} from '@/lib/validation'
 import {audit, notify} from '@/lib/auth/audit'
 import {requireApiUser, isResponse} from '@/lib/auth/context'
 import {parseBody, fail, clientMeta} from '@/lib/api'
+import type {OrderRow} from '@/lib/db-types'
 
 /**
  * Payment submissions.
@@ -15,8 +16,7 @@ import {parseBody, fail, clientMeta} from '@/lib/api'
  *  Wire: the investor submits the bank reference; finance reconciles.
  *
  *  Card: integration point for the card gateway — enabled when
- *  CARD_PAYMENT_ENDPOINT/CARD_PAYMENT_KEY are configured; until then the
- *  route returns a clear "not yet enabled" state rather than pretending.
+ *  CARD_PAYMENT_ENDPOINT/CARD_PAYMENT_KEY are configured; until then the route returns a clear "not yet enabled" state rather than pretending.
  */
 export async function POST(req: NextRequest) {
   const guard = await requireApiUser()
@@ -29,28 +29,45 @@ export async function POST(req: NextRequest) {
   if (method === 'mpesa') {
     const parsed = mpesaConfirmationSchema.safeParse(body)
     if (!parsed.success) return fail(parsed.error.issues[0]?.message || 'Paste the full M-Pesa confirmation message.')
-    const order = await db.order.findFirst({
-      where: {id: parsed.data.orderId, userId: ctx.user.id},
-      include: {payments: true},
-    })
-    if (!order) return fail('Order not found.', 404)
+    const orderRow = unwrapNullable<OrderRow>(
+      await supabase
+        .from('orders')
+        .select('*')
+        .eq('id', parsed.data.orderId)
+        .eq('user_id', ctx.user.id)
+        .maybeSingle(),
+      'payments.orderForMpesa',
+    )
+    if (!orderRow) return fail('Order not found.', 404)
+    const order = toCamel(orderRow)
     if (order.status === 'cancelled') return fail('This order was cancelled.', 409)
 
     const reference = extractMpesaCode(parsed.data.mpesaMessage)
-    await db.payment.create({
-      data: {
-        orderId: order.id,
-        userId: ctx.user.id,
+    // NOTE: sequential (no multi-table tx over PostgREST)
+    unwrap<null>(
+      await supabase.from('payments').insert({
+        id: newId(),
+        order_id: order.id,
+        user_id: ctx.user.id,
         method: 'mpesa',
-        amountKes: order.amountKes,
-        amountUsd: order.amountUsd,
+        amount_kes: order.amountKes,
+        amount_usd: order.amountUsd,
         currency: 'KES',
         reference,
-        confirmationRaw: parsed.data.mpesaMessage,
+        confirmation_raw: parsed.data.mpesaMessage,
         status: 'submitted',
-      },
-    })
-    await db.order.update({where: {id: order.id}, data: {status: 'payment_confirmed', paymentMethod: 'mpesa', transactionId: reference}})
+        created_at: nowIso(),
+      }),
+      'payments.createMpesa',
+    )
+    // updated_at is maintained by the DB trigger — not set here.
+    unwrap<null>(
+      await supabase
+        .from('orders')
+        .update({status: 'payment_confirmed', payment_method: 'mpesa', transaction_id: reference})
+        .eq('id', order.id),
+      'payments.confirmMpesa',
+    )
     await notify({
       userId: ctx.user.id,
       type: 'order_status',
@@ -65,25 +82,43 @@ export async function POST(req: NextRequest) {
   if (method === 'wire') {
     const parsed = wireConfirmationSchema.safeParse(body)
     if (!parsed.success) return fail('Provide the bank transfer reference.')
-    const order = await db.order.findFirst({
-      where: {id: parsed.data.orderId, userId: ctx.user.id},
-    })
-    if (!order) return fail('Order not found.', 404)
+    const orderRow = unwrapNullable<OrderRow>(
+      await supabase
+        .from('orders')
+        .select('*')
+        .eq('id', parsed.data.orderId)
+        .eq('user_id', ctx.user.id)
+        .maybeSingle(),
+      'payments.orderForWire',
+    )
+    if (!orderRow) return fail('Order not found.', 404)
+    const order = toCamel(orderRow)
     if (order.status === 'cancelled') return fail('This order was cancelled.', 409)
 
-    await db.payment.create({
-      data: {
-        orderId: order.id,
-        userId: ctx.user.id,
+    // NOTE: sequential (no multi-table tx over PostgREST)
+    unwrap<null>(
+      await supabase.from('payments').insert({
+        id: newId(),
+        order_id: order.id,
+        user_id: ctx.user.id,
         method: 'wire',
-        amountKes: order.amountKes,
-        amountUsd: order.amountUsd,
+        amount_kes: order.amountKes,
+        amount_usd: order.amountUsd,
         currency: order.currency,
         reference: parsed.data.bankReference,
         status: 'submitted',
-      },
-    })
-    await db.order.update({where: {id: order.id}, data: {status: 'payment_confirmed', paymentMethod: 'wire', transactionId: parsed.data.bankReference}})
+        created_at: nowIso(),
+      }),
+      'payments.createWire',
+    )
+    // updated_at is maintained by the DB trigger — not set here.
+    unwrap<null>(
+      await supabase
+        .from('orders')
+        .update({status: 'payment_confirmed', payment_method: 'wire', transaction_id: parsed.data.bankReference})
+        .eq('id', order.id),
+      'payments.confirmWire',
+    )
     await notify({
       userId: ctx.user.id,
       type: 'order_status',

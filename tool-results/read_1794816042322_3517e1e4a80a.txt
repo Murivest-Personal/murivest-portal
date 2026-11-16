@@ -1,0 +1,873 @@
+     1→import {cache} from 'react'
+     2→import {db} from '@/lib/db'
+     3→import {sanityClient} from '@/lib/sanity/client'
+     4→import type {OpportunityDoc, MarketReportDoc, AccessTier} from '@/lib/sanity/types'
+     5→import type {AdminContext} from './rbac'
+     6→import {investorScopeWhere} from './rbac'
+     7→import {revenueCardMetrics} from './revenue'
+     8→import type {Period} from './period'
+     9→
+    10→/**
+    11→ * Admin read-model — one function per module screen. Advisor scoping is
+    12→ * applied inside every query: advisors only ever receive rows belonging to
+    13→ * investors assigned to them.
+    14→ */
+    15→
+    16→// ---------------------------------------------------------------------------
+    17→// Sanity admin reads (all tiers — staff perspective)
+    18→// ---------------------------------------------------------------------------
+    19→
+    20→const ADMIN_OPP_PROJECTION = `{
+    21→  _id, title, "slug": slug.current, status, accessTier, assetClass, geography,
+    22→  dealStructure, indicativePrice, investmentSizeMin, investmentSizeMax,
+    23→  financials, summary, auctionUrl, featured, publishDate
+    24→}`
+    25→
+    26→export const getAdminOpportunities = cache(async (): Promise<OpportunityDoc[]> => {
+    27→  const client = sanityClient()
+    28→  if (!client) return []
+    29→  return client.fetch(
+    30→    `*[_type == "opportunity" && defined(published) && published == true] | order(publishDate desc, title asc) ${ADMIN_OPP_PROJECTION}`,
+    31→  )
+    32→})
+    33→
+    34→export const getAdminReports = cache(async (): Promise<MarketReportDoc[]> => {
+    35→  const client = sanityClient()
+    36→  if (!client) return []
+    37→  return client.fetch(
+    38→    `*[_type == "marketReport" && defined(published) && published == true] | order(publishDate desc) {_id, title, "slug": slug.current, category, geography, accessTier, summary, publishDate}`,
+    39→  )
+    40→})
+    41→
+    42→export function sanityStudioUrl(): string {
+    43→  return process.env.SANITY_STUDIO_URL || 'https://murivest.sanity.studio'
+    44→}
+    45→
+    46→// ---------------------------------------------------------------------------
+    47→// Investors
+    48→// ---------------------------------------------------------------------------
+    49→
+    50→export interface InvestorListRow {
+    51→  userId: string
+    52→  email: string
+    53→  fullName: string | null
+    54→  status: string
+    55→  classification: string
+    56→  verificationStatus: string
+    57→  kycStatus: string
+    58→  amlStatus: string
+    59→  accessTier: string
+    60→  ndaAccepted: boolean
+    61→  advisorId: string | null
+    62→  source: string | null
+    63→  countryResidence: string | null
+    64→  organisationId: string | null
+    65→  organisationName: string | null
+    66→  equityAvailable: number | null
+    67→  totalCapacity: number | null
+    68→  capitalFloor: number | null
+    69→  capitalCeiling: number | null
+    70→  capitalCurrency: string
+    71→  createdAt: Date
+    72→  lastLoginAt: Date | null
+    73→  orderCount: number
+    74→  revenueUsd: number
+    75→  activeMandates: number
+    76→}
+    77→
+    78→export async function investorList(
+    79→  actx: AdminContext,
+    80→  opts: {search?: string; tier?: string; verification?: string; classification?: string; dormant?: boolean; limit?: number} = {},
+    81→): Promise<InvestorListRow[]> {
+    82→  const scope = investorScopeWhere(actx)
+    83→  const search = opts.search?.trim().toLowerCase() || null
+    84→
+    85→  const profiles = await db.investorProfile.findMany({
+    86→    where: {
+    87→      ...(scope ?? {}),
+    88→      ...(opts.tier ? {accessTier: opts.tier} : {}),
+    89→      ...(opts.verification ? {verificationStatus: opts.verification} : {}),
+    90→      ...(opts.classification ? {classification: opts.classification} : {}),
+    91→    },
+    92→    include: {
+    93→      user: {select: {id: true, email: true, fullName: true, status: true, lastLoginAt: true, createdAt: true}},
+    94→    },
+    95→    orderBy: {createdAt: 'desc'},
+    96→    take: opts.limit ?? 500,
+    97→  })
+    98→
+    99→  let rows = profiles.filter((p) => {
+   100→    if (!search) return true
+   101→    return (
+   102→      p.user.email.toLowerCase().includes(search) ||
+   103→      (p.user.fullName ?? '').toLowerCase().includes(search) ||
+   104→      (p.countryResidence ?? '').toLowerCase().includes(search)
+   105→    )
+   106→  })
+   107→
+   108→  if (opts.dormant) {
+   109→    const cutoff = Date.now() - 60 * 86400000
+   110→    rows = rows.filter((p) => !p.user.lastLoginAt || p.user.lastLoginAt.getTime() < cutoff)
+   111→  }
+   112→
+   113→  const userIds = rows.map((r) => r.userId)
+   114→  const [orders, revenueEvents, mandates, orgs] = await Promise.all([
+   115→    userIds.length ? db.order.findMany({where: {userId: {in: userIds}}, select: {userId: true}}) : [],
+   116→    userIds.length ? db.revenueEvent.findMany({select: {grossUsd: true, order: {select: {userId: true}}}}) : [],
+   117→    userIds.length ? db.mandate.findMany({where: {userId: {in: userIds}, status: 'active'}, select: {userId: true}}) : [],
+   118→    db.organisation.findMany({select: {id: true, name: true}}),
+   119→  ])
+   120→  const orderCount = new Map<string, number>()
+   121→  for (const o of orders) orderCount.set(o.userId, (orderCount.get(o.userId) ?? 0) + 1)
+   122→  const revenueBy = new Map<string, number>()
+   123→  for (const e of revenueEvents) revenueBy.set(e.order.userId, (revenueBy.get(e.order.userId) ?? 0) + e.grossUsd)
+   124→  const mandateCount = new Map<string, number>()
+   125→  for (const m of mandates) mandateCount.set(m.userId, (mandateCount.get(m.userId) ?? 0) + 1)
+   126→  const orgNames = new Map(orgs.map((o) => [o.id, o.name]))
+   127→
+   128→  return rows.map((p) => ({
+   129→    userId: p.userId,
+   130→    email: p.user.email,
+   131→    fullName: p.user.fullName,
+   132→    status: p.user.status,
+   133→    classification: p.classification,
+   134→    verificationStatus: p.verificationStatus,
+   135→    kycStatus: p.kycStatus,
+   136→    amlStatus: p.amlStatus,
+   137→    accessTier: p.accessTier,
+   138→    ndaAccepted: p.ndaAccepted,
+   139→    advisorId: p.advisorId,
+   140→    source: p.source,
+   141→    countryResidence: p.countryResidence,
+   142→    organisationId: p.organisationId,
+   143→    organisationName: p.organisationId ? orgNames.get(p.organisationId) ?? null : null,
+   144→    equityAvailable: p.equityAvailable,
+   145→    totalCapacity: p.totalCapacity,
+   146→    capitalFloor: p.capitalFloor,
+   147→    capitalCeiling: p.capitalCeiling,
+   148→    capitalCurrency: p.capitalCurrency,
+   149→    createdAt: p.user.createdAt,
+   150→    lastLoginAt: p.user.lastLoginAt,
+   151→    orderCount: orderCount.get(p.userId) ?? 0,
+   152→    revenueUsd: Math.round((revenueBy.get(p.userId) ?? 0) * 100) / 100,
+   153→    activeMandates: mandateCount.get(p.userId) ?? 0,
+   154→  }))
+   155→}
+   156→
+   157→export async function investorDetail(actx: AdminContext, userId: string) {
+   158→  const scope = investorScopeWhere(actx)
+   159→  const profile = await db.investorProfile.findUnique({
+   160→    where: {userId},
+   161→    include: {user: {select: {id: true, email: true, fullName: true, status: true, lastLoginAt: true, createdAt: true, emailVerifiedAt: true, mfaEnabled: true, failedLogins: true, lockedUntil: true}}},
+   162→  })
+   163→  if (!profile) return null
+   164→  if (scope && profile.advisorId !== actx.auth.user.id) return null
+   165→
+   166→  const [org, orders, mandates, grants, sessions, secEvents, notes, reviews, criteria, savedCount, scenarioCount, enquiriesCount, auditTrail, advisor] = await Promise.all([
+   167→    profile.organisationId
+   168→      ? db.organisation.findUnique({where: {id: profile.organisationId}, include: {members: {include: {user: {select: {id: true, fullName: true, email: true}}}}}})
+   169→      : null,
+   170→    db.order.findMany({where: {userId}, orderBy: {createdAt: 'desc'}, select: {id: true, reference: true, briefTitle: true, briefType: true, status: true, amountUsd: true, currency: true, createdAt: true, deliveredAt: true}}),
+   171→    db.mandate.findMany({where: {userId}, orderBy: {createdAt: 'desc'}, select: {id: true, reference: true, title: true, status: true, stage: true, probability: true, targetAllocationMin: true, targetAllocationMax: true, currency: true, createdAt: true}}),
+   172→    db.documentGrant.findMany({where: {userId}, orderBy: {createdAt: 'desc'}, select: {id: true, sanityDocumentId: true, permission: true, expiresAt: true, createdAt: true}}),
+   173→    db.session.findMany({where: {userId}, orderBy: {lastSeenAt: 'desc'}, take: 6, select: {id: true, device: true, ip: true, userAgent: true, createdAt: true, lastSeenAt: true, expiresAt: true, revokedAt: true}}),
+   174→    db.securityEvent.findMany({where: {userId}, orderBy: {createdAt: 'desc'}, take: 12, select: {id: true, type: true, ip: true, createdAt: true}}),
+   175→    db.internalNote.findMany({where: {entityType: 'investor', entityId: userId}, orderBy: {createdAt: 'desc'}, select: {id: true, authorId: true, body: true, visibility: true, createdAt: true}}),
+   176→    db.complianceReview.findMany({where: {subjectUserId: userId}, orderBy: {createdAt: 'desc'}, take: 20, select: {id: true, reviewerId: true, decision: true, notes: true, riskFlags: true, detail: true, createdAt: true}}),
+   177→    db.investorCriteria.findUnique({where: {userId}}),
+   178→    db.savedOpportunity.count({where: {userId}}),
+   179→    db.scenario.count({where: {userId}}),
+   180→    db.enquiry.count({where: {userId}}),
+   181→    db.auditLog.findMany({
+   182→      where: {OR: [{actorId: userId}, {AND: [{entity: 'profile'}, {entityId: profile.id}]}]},
+   183→      orderBy: {createdAt: 'desc'},
+   184→      take: 40,
+   185→      select: {id: true, action: true, entity: true, entityId: true, actorType: true, detail: true, ip: true, createdAt: true},
+   186→    }),
+   187→    profile.advisorId ? db.user.findUnique({where: {id: profile.advisorId}, select: {id: true, fullName: true, email: true}}) : null,
+   188→  ])
+   189→
+   190→  const staffIds = [...new Set([...notes.map((n) => n.authorId), ...reviews.map((r) => r.reviewerId)].filter((x): x is string => !!x))]
+   191→  const staff = staffIds.length ? await db.user.findMany({where: {id: {in: staffIds}}, select: {id: true, fullName: true, email: true}}) : []
+   192→  const staffNames = new Map(staff.map((s) => [s.id, s.fullName || s.email]))
+   193→
+   194→  return {
+   195→    profile,
+   196→    user: profile.user,
+   197→    organisation: org,
+   198→    advisor,
+   199→    orders,
+   200→    mandates,
+   201→    grants,
+   202→    sessions,
+   203→    securityEvents: secEvents,
+   204→    notes: notes.map((n) => ({...n, authorName: staffNames.get(n.authorId) ?? 'Staff'})),
+   205→    reviews: reviews.map((r) => ({...r, reviewerName: staffNames.get(r.reviewerId) ?? 'Staff'})),
+   206→    criteria,
+   207→    stats: {savedCount, scenarioCount, enquiriesCount},
+   208→    auditTrail,
+   209→  }
+   210→}
+   211→
+   212→// ---------------------------------------------------------------------------
+   213→// Organisations
+   214→// ---------------------------------------------------------------------------
+   215→
+   216→export async function organisationList() {
+   217→  const orgs = await db.organisation.findMany({
+   218→    include: {
+   219→      members: {include: {user: {select: {id: true, fullName: true, email: true, lastLoginAt: true, status: true}}}},
+   220→      _count: {select: {members: true}},
+   221→    },
+   222→    orderBy: {createdAt: 'desc'},
+   223→  })
+   224→  return orgs.map((o) => ({
+   225→    id: o.id,
+   226→    name: o.name,
+   227→    legalName: o.legalName,
+   228→    type: o.type,
+   229→    country: o.country,
+   230→    website: o.website,
+   231→    verified: o.verified,
+   232→    createdAt: o.createdAt,
+   233→    members: o.members.map((m) => ({id: m.id, userId: m.userId, name: m.user.fullName || m.user.email, email: m.user.email, role: m.role, title: m.title, status: m.status, lastLoginAt: m.user.lastLoginAt})),
+   234→  }))
+   235→}
+   236→
+   237→// ---------------------------------------------------------------------------
+   238→// Orders (Orders Engine)
+   239→// ---------------------------------------------------------------------------
+   240→
+   241→const OPEN_STATUSES = ['pending', 'awaiting_payment', 'payment_confirmed', 'processing', 'internal_review', 'ready']
+   242→
+   243→export async function orderList(
+   244→  actx: AdminContext,
+   245→  opts: {status?: string; search?: string; priority?: string; assignedTo?: string; limit?: number} = {},
+   246→) {
+   247→  const assignedUserIds = actx.advisorId
+   248→    ? (await db.investorProfile.findMany({where: {advisorId: actx.auth.user.id}, select: {userId: true}})).map((p) => p.userId)
+   249→    : null
+   250→
+   251→  const where: Record<string, unknown> = {}
+   252→  if (opts.status === 'open') where.status = {in: OPEN_STATUSES}
+   253→  else if (opts.status) where.status = opts.status
+   254→  if (opts.priority) where.priority = opts.priority
+   255→  if (opts.assignedTo === 'me') where.assignedToId = actx.auth.user.id
+   256→  else if (opts.assignedTo === 'unassigned') where.assignedToId = null
+   257→  if (assignedUserIds) where.userId = {in: assignedUserIds}
+   258→
+   259→  let orders = await db.order.findMany({
+   260→    where,
+   261→    orderBy: [{createdAt: 'desc'}],
+   262→    take: opts.limit ?? 400,
+   263→    include: {payments: {select: {id: true, status: true, method: true, amountUsd: true, amountKes: true, reference: true, createdAt: true, verifiedAt: true}}},
+   264→  })
+   265→
+   266→  const search = opts.search?.trim().toLowerCase()
+   267→  if (search) {
+   268→    orders = orders.filter(
+   269→      (o) =>
+   270→        o.reference.toLowerCase().includes(search) ||
+   271→        o.briefTitle.toLowerCase().includes(search) ||
+   272→        (o.contactEmail ?? '').toLowerCase().includes(search) ||
+   273→        (o.contactName ?? '').toLowerCase().includes(search),
+   274→    )
+   275→  }
+   276→
+   277→  const userIds = [...new Set(orders.map((o) => o.userId))]
+   278→  const profiles = userIds.length
+   279→    ? await db.investorProfile.findMany({where: {userId: {in: userIds}}, select: {userId: true, classification: true, accessTier: true, advisorId: true, organisationId: true}})
+   280→    : []
+   281→  const users = userIds.length ? await db.user.findMany({where: {id: {in: userIds}}, select: {id: true, fullName: true, email: true}}) : []
+   282→  const orgIds = [...new Set(profiles.map((p) => p.organisationId).filter((x): x is string => !!x))]
+   283→  const orgs = orgIds.length ? await db.organisation.findMany({where: {id: {in: orgIds}}, select: {id: true, name: true}}) : []
+   284→  const profileBy = new Map(profiles.map((p) => [p.userId, p]))
+   285→  const userBy = new Map(users.map((u) => [u.id, u]))
+   286→  const orgBy = new Map(orgs.map((o) => [o.id, o.name]))
+   287→
+   288→  return orders.map((o) => ({
+   289→    id: o.id,
+   290→    reference: o.reference,
+   291→    userId: o.userId,
+   292→    investorName: userBy.get(o.userId)?.fullName || userBy.get(o.userId)?.email || o.userId,
+   293→    investorEmail: userBy.get(o.userId)?.email ?? '',
+   294→    investorClass: profileBy.get(o.userId)?.classification ?? 'individual',
+   295→    investorTier: profileBy.get(o.userId)?.accessTier ?? 'tier_1',
+   296→    organisationName: profileBy.get(o.userId)?.organisationId ? orgBy.get(profileBy.get(o.userId)!.organisationId!) ?? null : null,
+   297→    briefTitle: o.briefTitle,
+   298→    briefType: o.briefType,
+   299→    briefSource: o.briefSource,
+   300→    format: o.format,
+   301→    customScope: o.customScope,
+   302→    status: o.status,
+   303→    priority: o.priority,
+   304→    assignedToId: o.assignedToId,
+   305→    advisorId: o.advisorId ?? profileBy.get(o.userId)?.advisorId ?? null,
+   306→    amountUsd: o.amountUsd,
+   307→    amountKes: o.amountKes,
+   308→    currency: o.currency,
+   309→    createdAt: o.createdAt,
+   310→    dueAt: o.dueAt,
+   311→    deliveredAt: o.deliveredAt,
+   312→    closedAt: o.closedAt,
+   313→    payment: o.payments[0] ?? null,
+   314→    hasVerifiedPayment: o.payments.some((p) => p.status === 'verified'),
+   315→  }))
+   316→}
+   317→
+   318→export async function orderDetail(actx: AdminContext, orderId: string) {
+   319→  const order = await db.order.findUnique({
+   320→    where: {id: orderId},
+   321→    include: {payments: true},
+   322→  })
+   323→  if (!order) return null
+   324→
+   325→  const [profile, user, events, notes, refunds, revenue] = await Promise.all([
+   326→    db.investorProfile.findUnique({where: {userId: order.userId}}),
+   327→    db.user.findUnique({where: {id: order.userId}, select: {id: true, fullName: true, email: true, status: true}}),
+   328→    db.orderStatusEvent.findMany({where: {orderId}, orderBy: {createdAt: 'asc'}}),
+   329→    db.internalNote.findMany({where: {entityType: 'order', entityId: orderId}, orderBy: {createdAt: 'desc'}}),
+   330→    db.refundAdjustment.findMany({where: {orderId}, orderBy: {createdAt: 'desc'}}),
+   331→    db.revenueEvent.findUnique({where: {orderId}}),
+   332→  ])
+   333→
+   334→  if (actx.advisorId && profile?.advisorId !== actx.auth.user.id) return null
+   335→
+   336→  const staffIds = [
+   337→    ...new Set(
+   338→      [
+   339→        ...events.map((e) => e.changedById),
+   340→        ...notes.map((n) => n.authorId),
+   341→        ...refunds.map((r) => r.requestedById),
+   342→        ...refunds.map((r) => r.reviewedById ?? null),
+   343→        order.assignedToId,
+   344→        order.advisorId,
+   345→        profile?.advisorId ?? null,
+   346→      ].filter((x): x is string => !!x),
+   347→    ),
+   348→  ]
+   349→  const staff = staffIds.length ? await db.user.findMany({where: {id: {in: staffIds}}, select: {id: true, fullName: true, email: true}}) : []
+   350→  const staffNames = new Map(staff.map((s) => [s.id, s.fullName || s.email]))
+   351→
+   352→  const assignments = await db.order.findUnique({where: {id: orderId}, select: {assignedToId: true, advisorId: true}})
+   353→
+   354→  return {
+   355→    order,
+   356→    investor: {user, profile},
+   357→    payments: order.payments,
+   358→    events: events.map((e) => ({...e, changedByName: e.changedById ? staffNames.get(e.changedById) ?? 'Staff' : 'System'})),
+   359→    notes: notes.map((n) => ({...n, authorName: staffNames.get(n.authorId) ?? 'Staff'})),
+   360→    refunds: refunds.map((r) => ({
+   361→      ...r,
+   362→      requestedByName: staffNames.get(r.requestedById) ?? 'Staff',
+   363→      reviewedByName: r.reviewedById ? staffNames.get(r.reviewedById) ?? 'Staff' : null,
+   364→    })),
+   365→    revenue,
+   366→    assignment: {
+   367→      assignedToName: assignments?.assignedToId ? staffNames.get(assignments.assignedToId) ?? null : null,
+   368→      advisorName: (assignments?.advisorId ?? profile?.advisorId ?? null) ? staffNames.get(assignments?.advisorId ?? profile!.advisorId!) ?? null : null,
+   369→    },
+   370→  }
+   371→}
+   372→
+   373→// ---------------------------------------------------------------------------
+   374→// Mandates & pipeline
+   375→// ---------------------------------------------------------------------------
+   376→
+   377→export async function mandateList(
+   378→  actx: AdminContext,
+   379→  opts: {status?: string; stage?: string; search?: string; limit?: number} = {},
+   380→) {
+   381→  const assignedUserIds = actx.advisorId
+   382→    ? (await db.investorProfile.findMany({where: {advisorId: actx.auth.user.id}, select: {userId: true}})).map((p) => p.userId)
+   383→    : null
+   384→
+   385→  const where: Record<string, unknown> = {}
+   386→  if (opts.status) where.status = opts.status
+   387→  if (opts.stage) where.stage = opts.stage
+   388→  if (assignedUserIds) where.OR = [{userId: {in: assignedUserIds}}, {advisorId: actx.auth.user.id}]
+   389→
+   390→  let mandates = await db.mandate.findMany({
+   391→    where,
+   392→    orderBy: {updatedAt: 'desc'},
+   393→    take: opts.limit ?? 300,
+   394→    include: {milestones: {orderBy: {createdAt: 'asc'}, select: {id: true, title: true, status: true, dueDate: true}}},
+   395→  })
+   396→
+   397→  const search = opts.search?.trim().toLowerCase()
+   398→  if (search) mandates = mandates.filter((m) => m.reference.toLowerCase().includes(search) || m.title.toLowerCase().includes(search))
+   399→
+   400→  const userIds = [...new Set(mandates.map((m) => m.userId))]
+   401→  const users = userIds.length ? await db.user.findMany({where: {id: {in: userIds}}, select: {id: true, fullName: true, email: true}}) : []
+   402→  const userBy = new Map(users.map((u) => [u.id, u]))
+   403→  const advisors = await db.user.findMany({where: {role: {in: ['advisor', 'admin']}}, select: {id: true, fullName: true, email: true}})
+   404→  const advisorNames = new Map(advisors.map((a) => [a.id, a.fullName || a.email]))
+   405→
+   406→  return mandates.map((m) => ({
+   407→    id: m.id,
+   408→    reference: m.reference,
+   409→    title: m.title,
+   410→    status: m.status,
+   411→    stage: m.stage,
+   412→    probability: m.probability,
+   413→    nextAction: m.nextAction,
+   414→    nextActionDue: m.nextActionDue,
+   415→    targetAllocationMin: m.targetAllocationMin,
+   416→    targetAllocationMax: m.targetAllocationMax,
+   417→    currency: m.currency,
+   418→    geographies: m.geographies,
+   419→    assetClasses: m.assetClasses,
+   420→    minNetYield: m.minNetYield,
+   421→    targetIrr: m.targetIrr,
+   422→    investorName: userBy.get(m.userId)?.fullName || userBy.get(m.userId)?.email || m.userId,
+   423→    investorEmail: userBy.get(m.userId)?.email ?? '',
+   424→    advisorId: m.advisorId,
+   425→    advisorName: m.advisorId ? advisorNames.get(m.advisorId) ?? null : null,
+   426→    milestones: m.milestones,
+   427→    createdAt: m.createdAt,
+   428→    submittedAt: m.submittedAt,
+   429→    activatedAt: m.activatedAt,
+   430→    closedAt: m.closedAt,
+   431→    updatedAt: m.updatedAt,
+   432→  }))
+   433→}
+   434→
+   435→// ---------------------------------------------------------------------------
+   436→// Documents & data room
+   437→// ---------------------------------------------------------------------------
+   438→
+   439→export async function documentsWorkspace() {
+   440→  const [grants, requests, accessLogs, metas] = await Promise.all([
+   441→    db.documentGrant.findMany({orderBy: {createdAt: 'desc'}, take: 400, select: {id: true, sanityDocumentId: true, userId: true, organisationId: true, permission: true, expiresAt: true, grantedById: true, createdAt: true}}),
+   442→    db.documentRequest.findMany({orderBy: {createdAt: 'desc'}, take: 200}),
+   443→    db.documentAccessLog.findMany({orderBy: {createdAt: 'desc'}, take: 300, select: {id: true, userId: true, sanityDocumentId: true, documentTitle: true, action: true, ip: true, createdAt: true}}),
+   444→    db.contentMeta.findMany({where: {contentType: 'document'}, select: {sanityId: true, status: true, visibilityTier: true, tags: true, notes: true}}),
+   445→  ])
+   446→
+   447→  const userIds = [...new Set([...grants.map((g) => g.userId ?? ''), ...accessLogs.map((l) => l.userId), ...requests.map((r) => r.userId)].filter(Boolean))]
+   448→  const users = userIds.length ? await db.user.findMany({where: {id: {in: userIds}}, select: {id: true, fullName: true, email: true}}) : []
+   449→  const userBy = new Map(users.map((u) => [u.id, u.fullName || u.email]))
+   450→
+   451→  // Sanity document titles (server-side, all tiers)
+   452→  const client = sanityClient()
+   453→  const sanityDocs = client
+   454→    ? await client.fetch(`*[_type == "document" && defined(published) && published == true] | order(title asc) {_id, title, docType, accessTier, downloadable, publishDate, "fileExtension": file.asset->extension}`).catch(() => [])
+   455→    : []
+   456→
+   457→  return {
+   458→    grants: grants.map((g) => ({...g, userName: g.userId ? userBy.get(g.userId) ?? g.userId : null})),
+   459→    requests: requests.map((r) => ({...r, userName: userBy.get(r.userId) ?? r.userId})),
+   460→    accessLogs: accessLogs.map((l) => ({...l, userName: userBy.get(l.userId) ?? l.userId})),
+   461→    metas,
+   462→    sanityDocs,
+   463→    sanityConfigured: !!client,
+   464→  }
+   465→}
+   466→
+   467→// ---------------------------------------------------------------------------
+   468→// Communications
+   469→// ---------------------------------------------------------------------------
+   470→
+   471→export async function communicationsData(actx: AdminContext, opts: {status?: string} = {}) {
+   472→  const assignedUserIds = actx.advisorId
+   473→    ? (await db.investorProfile.findMany({where: {advisorId: actx.auth.user.id}, select: {userId: true}})).map((p) => p.userId)
+   474→    : null
+   475→
+   476→  const enquiries = await db.enquiry.findMany({
+   477→    where: {
+   478→      ...(opts.status ? {status: opts.status} : {}),
+   479→      ...(assignedUserIds ? {userId: {in: assignedUserIds}} : {}),
+   480→    },
+   481→    orderBy: {createdAt: 'desc'},
+   482→    take: 200,
+   483→    include: {messages: {orderBy: {createdAt: 'asc'}}},
+   484→  })
+   485→
+   486→  const userIds = [...new Set(enquiries.map((e) => e.userId))]
+   487→  const users = userIds.length ? await db.user.findMany({where: {id: {in: userIds}}, select: {id: true, fullName: true, email: true}}) : []
+   488→  const profiles = userIds.length ? await db.investorProfile.findMany({where: {userId: {in: userIds}}, select: {userId: true, classification: true, accessTier: true, advisorId: true}}) : []
+   489→  const userBy = new Map(users.map((u) => [u.id, u]))
+   490→  const profileBy = new Map(profiles.map((p) => [p.userId, p]))
+   491→  const advisors = await db.user.findMany({where: {role: {in: ['advisor', 'admin']}}, select: {id: true, fullName: true, email: true}})
+   492→  const advisorNames = new Map(advisors.map((a) => [a.id, a.fullName || a.email]))
+   493→
+   494→  const threads = enquiries.map((e) => {
+   495→    const lastAdvisorMsg = [...e.messages].reverse().find((m) => m.senderType !== 'investor')
+   496→    return {
+   497→      id: e.id,
+   498→      userId: e.userId,
+   499→      investorName: userBy.get(e.userId)?.fullName || userBy.get(e.userId)?.email || e.userId,
+   500→      investorEmail: userBy.get(e.userId)?.email ?? '',
+   501→      investorClass: profileBy.get(e.userId)?.classification ?? 'individual',
+   502→      tier: profileBy.get(e.userId)?.accessTier ?? 'tier_1',
+   503→      assignedAdvisor: profileBy.get(e.userId)?.advisorId ?? null,
+   504→      assignedAdvisorName: profileBy.get(e.userId)?.advisorId ? advisorNames.get(profileBy.get(e.userId)!.advisorId!) ?? null : null,
+   505→      subject: e.subject,
+   506→      opportunityTitle: e.opportunityTitle,
+   507→      status: e.status,
+   508→      createdAt: e.createdAt,
+   509→      updatedAt: e.updatedAt,
+   510→      messages: e.messages.map((m) => ({id: m.id, senderType: m.senderType, senderId: m.senderId, senderName: m.senderId ? advisorNames.get(m.senderId) ?? null : null, body: m.body, createdAt: m.createdAt, readAt: m.readAt})),
+   511→      awaitingReply: !lastAdvisorMsg,
+   512→      lastActivityAt: e.messages.length > 0 ? e.messages[e.messages.length - 1].createdAt : e.createdAt,
+   513→    }
+   514→  })
+   515→
+   516→  const notes = await db.internalNote.findMany({where: {entityType: 'enquiry'}, orderBy: {createdAt: 'desc'}, take: 100})
+   517→
+   518→  return {threads, notes}
+   519→}
+   520→
+   521→// ---------------------------------------------------------------------------
+   522→// Compliance workspace
+   523→// ---------------------------------------------------------------------------
+   524→
+   525→export async function complianceQueue() {
+   526→  const [pending, ndaGaps, docRequests, flagged, reviews, ndaVersions] = await Promise.all([
+   527→    db.investorProfile.findMany({
+   528→      where: {OR: [{verificationStatus: {in: ['kyc_pending', 'in_review', 'profile_submitted']}}, {kycStatus: {in: ['submitted', 'in_review']}}]},
+   529→      include: {user: {select: {id: true, email: true, fullName: true, createdAt: true, lastLoginAt: true, status: true}}},
+   530→      orderBy: {updatedAt: 'desc'},
+   531→    }),
+   532→    db.investorProfile.findMany({
+   533→      where: {accessTier: {in: ['tier_2', 'tier_3']}, ndaAccepted: false},
+   534→      include: {user: {select: {id: true, email: true, fullName: true}}},
+   535→    }),
+   536→    db.documentRequest.findMany({where: {status: {in: ['submitted', 'in_review']}}, orderBy: {createdAt: 'asc'}}),
+   537→    db.investorProfile.findMany({
+   538→      where: {OR: [{amlStatus: 'flagged'}, {user: {status: {in: ['suspended', 'locked']}}}]},
+   539→      include: {user: {select: {id: true, email: true, fullName: true, status: true}}},
+   540→    }),
+   541→    db.complianceReview.findMany({orderBy: {createdAt: 'desc'}, take: 50}),
+   542→    db.ndaAgreement.findMany({orderBy: {createdAt: 'desc'}, take: 100, select: {id: true, userId: true, version: true, ip: true, createdAt: true}}),
+   543→  ])
+   544→
+   545→  const staffIds = [...new Set(reviews.map((r) => r.reviewerId))]
+   546→  const staff = staffIds.length ? await db.user.findMany({where: {id: {in: staffIds}}, select: {id: true, fullName: true, email: true}}) : []
+   547→  const staffNames = new Map(staff.map((s) => [s.id, s.fullName || s.email]))
+   548→  const requestUserIds = [...new Set(docRequests.map((r) => r.userId))]
+   549→  const requestUsers = requestUserIds.length ? await db.user.findMany({where: {id: {in: requestUserIds}}, select: {id: true, fullName: true, email: true}}) : []
+   550→  const requestUserBy = new Map(requestUsers.map((u) => [u.id, u.fullName || u.email]))
+   551→
+   552→  return {
+   553→    pending: pending.map((p) => ({
+   554→      userId: p.userId,
+   555→      profileId: p.id,
+   556→      email: p.user.email,
+   557→      fullName: p.user.fullName,
+   558→      accountStatus: p.user.status,
+   559→      classification: p.classification,
+   560→      verificationStatus: p.verificationStatus,
+   561→      kycStatus: p.kycStatus,
+   562→      amlStatus: p.amlStatus,
+   563→      accessTier: p.accessTier,
+   564→      ndaAccepted: p.ndaAccepted,
+   565→      nationality: p.nationality,
+   566→      countryResidence: p.countryResidence,
+   567→      advisorId: p.advisorId,
+   568→      createdAt: p.user.createdAt,
+   569→      updatedAt: p.updatedAt,
+   570→    })),
+   571→    ndaGaps: ndaGaps.map((p) => ({userId: p.userId, email: p.user.email, fullName: p.user.fullName, accessTier: p.accessTier})),
+   572→    docRequests: docRequests.map((r) => ({...r, userName: requestUserBy.get(r.userId) ?? r.userId})),
+   573→    flagged: flagged.map((p) => ({userId: p.userId, email: p.user.email, fullName: p.user.fullName, accountStatus: p.user.status, amlStatus: p.amlStatus, accessTier: p.accessTier})),
+   574→    reviews: reviews.map((r) => ({...r, reviewerName: staffNames.get(r.reviewerId) ?? 'Staff'})),
+   575→    ndaVersions,
+   576→  }
+   577→}
+   578→
+   579→// ---------------------------------------------------------------------------
+   580→// Opportunity inventory (Sanity + interaction analytics + governance meta)
+   581→// ---------------------------------------------------------------------------
+   582→
+   583→export async function opportunityInventory() {
+   584→  const [sanityOps, metas, views, saves, orders, revenueEvents] = await Promise.all([
+   585→    getAdminOpportunities(),
+   586→    db.contentMeta.findMany({where: {contentType: 'opportunity'}}),
+   587→    db.opportunityView.findMany({select: {sanityId: true, userId: true}}),
+   588→    db.savedOpportunity.findMany({select: {sanityId: true}}),
+   589→    db.order.findMany({where: {sanityOpportunityId: {not: null}}, select: {sanityOpportunityId: true, status: true, amountUsd: true}}),
+   590→    db.revenueEvent.findMany({select: {grossUsd: true, order: {select: {sanityOpportunityId: true}}}}),
+   591→  ])
+   592→
+   593→  const viewsBy = new Map<string, {views: number; viewers: Set<string>}>()
+   594→  for (const v of views) {
+   595→    const cur = viewsBy.get(v.sanityId) ?? {views: 0, viewers: new Set<string>()}
+   596→    cur.views += 1
+   597→    cur.viewers.add(v.userId)
+   598→    viewsBy.set(v.sanityId, cur)
+   599→  }
+   600→  const savesBy = new Map<string, number>()
+   601→  for (const s of saves) savesBy.set(s.sanityId, (savesBy.get(s.sanityId) ?? 0) + 1)
+   602→  const ordersBy = new Map<string, number>()
+   603→  for (const o of orders) ordersBy.set(o.sanityOpportunityId!, (ordersBy.get(o.sanityOpportunityId!) ?? 0) + 1)
+   604→  const revenueBy = new Map<string, number>()
+   605→  for (const e of revenueEvents) {
+   606→    if (!e.order.sanityOpportunityId) continue
+   607→    revenueBy.set(e.order.sanityOpportunityId, (revenueBy.get(e.order.sanityOpportunityId) ?? 0) + e.grossUsd)
+   608→  }
+   609→  const metaBy = new Map(metas.map((m) => [m.sanityId, m]))
+   610→
+   611→  // Include Sanity documents AND any DB-tracked ids missing from Sanity.
+   612→  const ids = new Set<string>([...sanityOps.map((o) => o._id), ...viewsBy.keys(), ...ordersBy.keys(), ...metas.map((m) => m.sanityId)])
+   613→  const sanityById = new Map(sanityOps.map((o) => [o._id, o]))
+   614→
+   615→  const rows = [...ids].map((id) => {
+   616→    const op = sanityById.get(id)
+   617→    const meta = metaBy.get(id)
+   618→    const analytics = viewsBy.get(id)
+   619→    return {
+   620→      sanityId: id,
+   621→      title: op?.title ?? meta?.title ?? id,
+   622→      status: op?.status ?? (meta?.status === 'archived' ? 'closed' : 'marketed'),
+   623→      accessTier: (op?.accessTier ?? 'tier_1') as AccessTier,
+   624→      assetClass: op?.assetClass ?? null,
+   625→      geography: op?.geography ?? null,
+   626→      indicativePrice: op?.indicativePrice ?? null,
+   627→      investmentSizeMin: op?.investmentSizeMin ?? null,
+   628→      investmentSizeMax: op?.investmentSizeMax ?? null,
+   629→      publishDate: op?.publishDate ?? null,
+   630→      auctionUrl: op?.auctionUrl ?? null,
+   631→      featuredInSanity: op?.featured ?? false,
+   632→      // governance meta
+   633→      metaStatus: meta?.status ?? null,
+   634→      metaTags: (meta?.tags as string[] | null) ?? [],
+   635→      metaVisibilityTier: meta?.visibilityTier ?? null,
+   636→      metaNotes: meta?.notes ?? null,
+   637→      // analytics
+   638→      views: analytics?.views ?? 0,
+   639→      uniqueViewers: analytics?.viewers.size ?? 0,
+   640→      saves: savesBy.get(id) ?? 0,
+   641→      orders: ordersBy.get(id) ?? 0,
+   642→      revenueUsd: Math.round((revenueBy.get(id) ?? 0) * 100) / 100,
+   643→    }
+   644→  })
+   645→
+   646→  return {rows, sanityConfigured: sanityOps.length > 0, studioUrl: sanityStudioUrl()}
+   647→}
+   648→
+   649→// ---------------------------------------------------------------------------
+   650→// Market Intelligence CMS
+   651→// ---------------------------------------------------------------------------
+   652→
+   653→export async function intelligenceList() {
+   654→  const [reports, metas] = await Promise.all([
+   655→    getAdminReports(),
+   656→    db.contentMeta.findMany({where: {contentType: 'report'}}),
+   657→  ])
+   658→  const metaBy = new Map(metas.map((m) => [m.sanityId, m]))
+   659→  const ids = new Set<string>([...reports.map((r) => r._id), ...metas.map((m) => m.sanityId)])
+   660→  const reportById = new Map(reports.map((r) => [r._id, r]))
+   661→
+   662→  return {
+   663→    rows: [...ids].map((id) => {
+   664→      const r = reportById.get(id)
+   665→      const meta = metaBy.get(id)
+   666→      return {
+   667→        sanityId: id,
+   668→        title: r?.title ?? meta?.title ?? id,
+   669→        category: r?.category ?? 'commentary',
+   670→        geography: r?.geography ?? null,
+   671→        accessTier: (r?.accessTier ?? 'tier_1') as AccessTier,
+   672→        publishDate: r?.publishDate ?? null,
+   673→        metaStatus: meta?.status ?? null,
+   674→        metaVisibilityTier: meta?.visibilityTier ?? null,
+   675→        metaNotes: meta?.notes ?? null,
+   676→      }
+   677→    }),
+   678→    sanityConfigured: reports.length > 0,
+   679→    studioUrl: sanityStudioUrl(),
+   680→  }
+   681→}
+   682→
+   683→// ---------------------------------------------------------------------------
+   684→// Settings, staff, sessions, audit
+   685→// ---------------------------------------------------------------------------
+   686→
+   687→export async function staffList() {
+   688→  const staff = await db.user.findMany({
+   689→    where: {role: {in: ['advisor', 'admin']}},
+   690→    select: {id: true, email: true, fullName: true, role: true, status: true, lastLoginAt: true, createdAt: true, mfaEnabled: true},
+   691→    orderBy: {createdAt: 'asc'},
+   692→  })
+   693→  const profiles = await db.staffProfile.findMany()
+   694→  const profileBy = new Map(profiles.map((p) => [p.userId, p]))
+   695→  return staff.map((s) => ({
+   696→    ...s,
+   697→    adminRole: profileBy.get(s.id)?.adminRole ?? (s.role === 'admin' ? 'super_admin' : 'advisor'),
+   698→    hasStaffProfile: profileBy.has(s.id),
+   699→    title: profileBy.get(s.id)?.title ?? null,
+   700→    team: profileBy.get(s.id)?.team ?? null,
+   701→    isActive: profileBy.get(s.id)?.isActive ?? true,
+   702→  }))
+   703→}
+   704→
+   705→export async function settingsData() {
+   706→  const [settings, staff] = await Promise.all([db.systemSetting.findMany({orderBy: {key: 'asc'}}), staffList()])
+   707→
+   708→  const integrationStatus = [
+   709→    {key: 'smtp', label: 'Email (SMTP)', configured: !!(process.env.SMTP_HOST && process.env.SMTP_USER), detail: process.env.SMTP_HOST ? `${process.env.SMTP_HOST}:${process.env.SMTP_PORT ?? '587'}` : 'SMTP_HOST / SMTP_USER not set'},
+   710→    {key: 'sanity', label: 'Sanity CMS', configured: !!process.env.SANITY_PROJECT_ID && process.env.SANITY_PROJECT_ID !== 'your-project-id', detail: process.env.SANITY_PROJECT_ID ? `dataset: ${process.env.SANITY_DATASET || 'production'}` : 'SANITY_PROJECT_ID not set'},
+   711→    {key: 'payments', label: 'Payments (M-Pesa / wire / card)', configured: !!process.env.MPESA_SHORTCODE || !!process.env.PAYMENTS_MODE, detail: process.env.MPESA_SHORTCODE ? 'M-Pesa shortcode configured' : 'Manual verification mode (payments verified by staff)'},
+   712→    {key: 'auctions', label: 'Auctions (auctions.murivest.com)', configured: true, detail: 'Linked from opportunity records via auctionUrl'},
+   713→  ]
+   714→
+   715→  return {settings, staff, integrationStatus}
+   716→}
+   717→
+   718→export async function sessionsOverview() {
+   719→  const sessions = await db.session.findMany({
+   720→    orderBy: {lastSeenAt: 'desc'},
+   721→    take: 100,
+   722→    include: {user: {select: {id: true, email: true, fullName: true, role: true, status: true}}},
+   723→  })
+   724→  const securityEvents = await db.securityEvent.findMany({orderBy: {createdAt: 'desc'}, take: 50, include: {user: {select: {email: true, fullName: true}}}})
+   725→  return {sessions, securityEvents}
+   726→}
+   727→
+   728→export async function auditViewer(opts: {actorId?: string; entity?: string; action?: string; search?: string; limit?: number} = {}) {
+   729→  const where: Record<string, unknown> = {}
+   730→  if (opts.actorId) where.actorId = opts.actorId
+   731→  if (opts.entity) where.entity = opts.entity
+   732→  if (opts.action) where.action = {contains: opts.action}
+   733→
+   734→  let logs = await db.auditLog.findMany({
+   735→    where,
+   736→    orderBy: {createdAt: 'desc'},
+   737→    take: opts.limit ?? 150,
+   738→  })
+   739→
+   740→  const search = opts.search?.trim().toLowerCase()
+   741→  if (search) {
+   742→    logs = logs.filter((l) => JSON.stringify(l.detail ?? {}).toLowerCase().includes(search) || l.action.toLowerCase().includes(search) || (l.entityId ?? '').toLowerCase().includes(search))
+   743→  }
+   744→
+   745→  const actorIds = [...new Set(logs.map((l) => l.actorId).filter((x): x is string => !!x))]
+   746→  const actors = actorIds.length ? await db.user.findMany({where: {id: {in: actorIds}}, select: {id: true, fullName: true, email: true, role: true}}) : []
+   747→  const actorBy = new Map(actors.map((a) => [a.id, a]))
+   748→
+   749→  return logs.map((l) => ({
+   750→    id: l.id,
+   751→    action: l.action,
+   752→    entity: l.entity,
+   753→    entityId: l.entityId,
+   754→    actorType: l.actorType,
+   755→    actorName: l.actorId ? actorBy.get(l.actorId)?.fullName || actorBy.get(l.actorId)?.email || l.actorId : null,
+   756→    actorRole: l.actorId ? actorBy.get(l.actorId)?.role ?? null : null,
+   757→    detail: l.detail,
+   758→    ip: l.ip,
+   759→    createdAt: l.createdAt,
+   760→  }))
+   761→}
+   762→
+   763→// ---------------------------------------------------------------------------
+   764→// Command Centre
+   765→// ---------------------------------------------------------------------------
+   766→
+   767→export async function commandCentre(actx: AdminContext, period: Period) {
+   768→  const scope = investorScopeWhere(actx)
+   769→  const assignedUserIds = actx.advisorId
+   770→    ? (await db.investorProfile.findMany({where: {advisorId: actx.auth.user.id}, select: {userId: true}})).map((p) => p.userId)
+   771→    : null
+   772→
+   773→  const [revenue, pendingVerifications, openOrders, stalledMandates, openEnquiries, activity, paymentsToVerify, ordersToAssign, docRequestsPending, advisors] = await Promise.all([
+   774→    revenueCardMetrics(period),
+   775→    db.investorProfile.findMany({
+   776→      where: {...(scope ?? {}), OR: [{verificationStatus: {in: ['kyc_pending', 'in_review']}}, {kycStatus: {in: ['submitted', 'in_review']}}]},
+   777→      include: {user: {select: {email: true, fullName: true}}},
+   778→      orderBy: {updatedAt: 'asc'},
+   779→      take: 10,
+   780→    }),
+   781→    db.order.findMany({
+   782→      where: {status: {in: OPEN_STATUSES}, ...(assignedUserIds ? {userId: {in: assignedUserIds}} : {})},
+   783→      orderBy: [{priority: 'desc'}, {createdAt: 'asc'}],
+   784→      take: 10,
+   785→      include: {payments: {select: {status: true}}},
+   786→    }),
+   787→    db.mandate.findMany({
+   788→      where: {status: 'active', ...(assignedUserIds ? {OR: [{userId: {in: assignedUserIds}}, {advisorId: actx.auth.user.id}]} : {})},
+   789→      orderBy: {updatedAt: 'asc'},
+   790→      take: 10,
+   791→    }),
+   792→    db.enquiry.findMany({
+   793→      where: {status: 'open', ...(assignedUserIds ? {userId: {in: assignedUserIds}} : {})},
+   794→      orderBy: {createdAt: 'asc'},
+   795→      take: 10,
+   796→      include: {messages: {where: {senderType: {not: 'investor'}}, select: {id: true}}},
+   797→    }),
+   798→    db.auditLog.findMany({orderBy: {createdAt: 'desc'}, take: 20}),
+   799→    db.payment.count({where: {status: 'submitted'}}),
+   800→    db.order.count({where: {status: {in: ['payment_confirmed', 'processing']}, assignedToId: null}}),
+   801→    db.documentRequest.count({where: {status: 'submitted'}}),
+   802→    db.user.findMany({where: {role: {in: ['advisor', 'admin']}}, select: {id: true, fullName: true, email: true, role: true}}),
+   803→  ])
+   804→
+   805→  const actorIds = [...new Set(activity.map((a) => a.actorId).filter((x): x is string => !!x))]
+   806→  const actors = actorIds.length ? await db.user.findMany({where: {id: {in: actorIds}}, select: {id: true, fullName: true, email: true}}) : []
+   807→  const actorBy = new Map(actors.map((a) => [a.id, a.fullName || a.email]))
+   808→
+   809→  const now = Date.now()
+   810→  return {
+   811→    revenue,
+   812→    queues: {
+   813→      pendingVerifications: pendingVerifications.map((p) => ({
+   814→        userId: p.userId,
+   815→        name: p.user.fullName || p.user.email,
+   816→        email: p.user.email,
+   817→        verificationStatus: p.verificationStatus,
+   818→        kycStatus: p.kycStatus,
+   819→        accessTier: p.accessTier,
+   820→        waitingDays: Math.floor((now - p.createdAt.getTime()) / 86400000),
+   821→      })),
+   822→      openOrders: openOrders.map((o) => ({
+   823→        id: o.id,
+   824→        reference: o.reference,
+   825→        briefTitle: o.briefTitle,
+   826→        status: o.status,
+   827→        priority: o.priority,
+   828→        amountUsd: o.amountUsd,
+   829→        currency: o.currency,
+   830→        createdAt: o.createdAt,
+   831→        dueAt: o.dueAt,
+   832→        assigned: !!o.assignedToId,
+   833→        paid: o.payments.some((p) => p.status === 'verified'),
+   834→      })),
+   835→      stalledMandates: stalledMandates.map((m) => ({
+   836→        id: m.id,
+   837→        reference: m.reference,
+   838→        title: m.title,
+   839→        stage: m.stage,
+   840→        probability: m.probability,
+   841→        nextAction: m.nextAction,
+   842→        nextActionDue: m.nextActionDue,
+   843→        daysSinceUpdate: Math.floor((now - m.updatedAt.getTime()) / 86400000),
+   844→      })),
+   845→      openEnquiries: openEnquiries.map((e) => ({
+   846→        id: e.id,
+   847→        subject: e.subject,
+   848→        createdAt: e.createdAt,
+   849→        awaitingReply: e.messages.length === 0,
+   850→      })),
+   851→    },
+   852→    activity: activity.map((a) => ({
+   853→      id: a.id,
+   854→      action: a.action,
+   855→      entity: a.entity,
+   856→      entityId: a.entityId,
+   857→      actorName: a.actorId ? actorBy.get(a.actorId) ?? a.actorId : 'System',
+   858→      actorType: a.actorType,
+   859→      createdAt: a.createdAt,
+   860→      detail: a.detail,
+   861→    })),
+   862→    quickActions: {
+   863→      paymentsToVerify,
+   864→      ordersToAssign,
+   865→      docRequestsPending,
+   866→      newEnquiries: openEnquiries.length,
+   867→    },
+   868→    advisors: advisors.map((a) => ({id: a.id, name: a.fullName || a.email, role: a.role})),
+   869→  }
+   870→}
+   871→
+   872→export {OPEN_STATUSES}
+   873→

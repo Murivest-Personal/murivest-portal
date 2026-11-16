@@ -1,5 +1,6 @@
 import type {Metadata} from 'next'
-import {db} from '@/lib/db'
+import {supabase, unwrap, toCamelList} from '@/lib/supabase'
+import type {ComparisonRow, ScenarioRow} from '@/lib/db-types'
 import {requirePortalUser} from '@/lib/auth/context'
 import {getOpportunities} from '@/lib/sanity/queries'
 import {getSavedIds} from '@/lib/portal/data'
@@ -25,8 +26,18 @@ export default async function ComparePage({
   const [opportunities, savedIds, scenarioRows, comparisonRows] = await Promise.all([
     getOpportunities(ctx.effectiveTier),
     getSavedIds(ctx.user.id),
-    db.scenario.findMany({where: {userId: ctx.user.id}, orderBy: {updatedAt: 'desc'}}),
-    db.comparison.findMany({where: {userId: ctx.user.id}, orderBy: {updatedAt: 'desc'}}),
+    supabase
+      .from('scenarios')
+      .select('*')
+      .eq('user_id', ctx.user.id)
+      .order('updated_at', {ascending: false})
+      .then((res) => toCamelList(unwrap<ScenarioRow[]>(res, 'scenarios.list'))),
+    supabase
+      .from('comparisons')
+      .select('*')
+      .eq('user_id', ctx.user.id)
+      .order('updated_at', {ascending: false})
+      .then((res) => toCamelList(unwrap<ComparisonRow[]>(res, 'comparisons.list'))),
   ])
 
   const scenarios = scenarioRows.map((s) => ({
@@ -34,7 +45,7 @@ export default async function ComparePage({
     name: s.name,
     inputs: s.inputs as ScenarioInputs,
     summary: (s.summary as {totalCapitalRequirement?: number; equityRequired?: number; irrPct?: number | null; cashOnCashPct?: number | null; dscr?: number | null; equityMultiple?: number | null; capitalGap?: number} | undefined) ?? null,
-    updatedAt: s.updatedAt.toISOString(),
+    updatedAt: s.updatedAt,
   }))
 
   const savedComparisons = comparisonRows.map((c) => ({
@@ -42,7 +53,7 @@ export default async function ComparePage({
     name: c.name,
     sanityIds: (c.sanityIds as string[]) || [],
     scenarioIds: (c.scenarioIds as string[]) || [],
-    createdAt: c.createdAt.toISOString(),
+    createdAt: c.createdAt,
   }))
 
   return (

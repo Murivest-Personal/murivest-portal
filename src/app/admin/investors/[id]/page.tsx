@@ -1,7 +1,8 @@
 import {notFound} from 'next/navigation'
 import {requireAdminPage} from '@/lib/admin/rbac'
 import {investorDetail} from '@/lib/admin/queries'
-import {db} from '@/lib/db'
+import {supabase, unwrap, toCamelList} from '@/lib/supabase'
+import type {UserRow} from '@/lib/db-types'
 import InvestorDetailWorkspace from '@/components/admin/InvestorDetailWorkspace'
 import {PageHeader} from '@/components/admin/ui'
 
@@ -13,11 +14,17 @@ export default async function AdminInvestorDetailPage({params}: {params: Promise
   const detail = await investorDetail(actx, id)
   if (!detail) notFound()
 
-  const advisors = await db.user.findMany({
-    where: {role: {in: ['advisor', 'admin']}, status: 'active'},
-    select: {id: true, fullName: true, email: true, role: true},
-    orderBy: {fullName: 'asc'},
-  })
+  const advisors = toCamelList(
+    unwrap<Pick<UserRow, 'id' | 'full_name' | 'email' | 'role'>[]>(
+      await supabase
+        .from('users')
+        .select('id, full_name, email, role')
+        .in('role', ['advisor', 'admin'])
+        .eq('status', 'active')
+        .order('full_name', {ascending: true}),
+      'users.advisors',
+    ),
+  )
 
   return (
     <div>
@@ -30,16 +37,16 @@ export default async function AdminInvestorDetailPage({params}: {params: Promise
         data={{
           user: {
             ...detail.user,
-            lastLoginAt: detail.user.lastLoginAt?.toISOString() ?? null,
-            createdAt: detail.user.createdAt.toISOString(),
-            emailVerifiedAt: detail.user.emailVerifiedAt?.toISOString() ?? null,
-            lockedUntil: detail.user.lockedUntil?.toISOString() ?? null,
+            lastLoginAt: detail.user.lastLoginAt ?? null,
+            createdAt: detail.user.createdAt,
+            emailVerifiedAt: detail.user.emailVerifiedAt ?? null,
+            lockedUntil: detail.user.lockedUntil ?? null,
             mfaEnabled: detail.user.mfaEnabled ? 'true' : 'false',
           },
           profile: {
             ...detail.profile,
-            createdAt: detail.profile.createdAt.toISOString(),
-            updatedAt: detail.profile.updatedAt.toISOString(),
+            createdAt: detail.profile.createdAt,
+            updatedAt: detail.profile.updatedAt,
           },
           organisation: detail.organisation
             ? {
@@ -51,28 +58,28 @@ export default async function AdminInvestorDetailPage({params}: {params: Promise
           advisor: detail.advisor,
           orders: detail.orders.map((o) => ({
             ...o,
-            createdAt: o.createdAt.toISOString(),
-            deliveredAt: o.deliveredAt?.toISOString() ?? null,
+            createdAt: o.createdAt,
+            deliveredAt: o.deliveredAt ?? null,
           })),
-          mandates: detail.mandates.map((m) => ({...m, createdAt: m.createdAt.toISOString()})),
+          mandates: detail.mandates.map((m) => ({...m, createdAt: m.createdAt})),
           grants: detail.grants.map((g) => ({
             ...g,
-            expiresAt: g.expiresAt?.toISOString() ?? null,
-            createdAt: g.createdAt.toISOString(),
+            expiresAt: g.expiresAt ?? null,
+            createdAt: g.createdAt,
           })),
           sessions: detail.sessions.map((s) => ({
             ...s,
-            createdAt: s.createdAt.toISOString(),
-            lastSeenAt: s.lastSeenAt.toISOString(),
-            expiresAt: s.expiresAt.toISOString(),
-            revokedAt: s.revokedAt?.toISOString() ?? null,
+            createdAt: s.createdAt,
+            lastSeenAt: s.lastSeenAt,
+            expiresAt: s.expiresAt,
+            revokedAt: s.revokedAt ?? null,
           })),
-          securityEvents: detail.securityEvents.map((e) => ({...e, createdAt: e.createdAt.toISOString()})),
-          notes: detail.notes.map((n) => ({...n, createdAt: n.createdAt.toISOString()})),
-          reviews: detail.reviews.map((r) => ({...r, createdAt: r.createdAt.toISOString()})),
+          securityEvents: detail.securityEvents.map((e) => ({...e, createdAt: e.createdAt})),
+          notes: detail.notes.map((n) => ({...n, createdAt: n.createdAt})),
+          reviews: detail.reviews.map((r) => ({...r, createdAt: r.createdAt})),
           criteria: detail.criteria ?? null,
           stats: detail.stats,
-          auditTrail: detail.auditTrail.map((a) => ({...a, createdAt: a.createdAt.toISOString()})),
+          auditTrail: detail.auditTrail.map((a) => ({...a, createdAt: a.createdAt})),
           advisors: advisors.map((a) => ({id: a.id, name: a.fullName || a.email, role: a.role})),
           can: {manage: actx.can('investors.manage'), compliance: actx.can('compliance.review')},
         }}

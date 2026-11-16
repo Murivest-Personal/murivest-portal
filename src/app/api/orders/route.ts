@@ -1,19 +1,44 @@
 import {NextResponse, type NextRequest} from 'next/server'
-import {db} from '@/lib/db'
+import {supabase, unwrap, unwrapNullable, toCamel, toCamelList, toSnake, nowIso, newId} from '@/lib/supabase'
 import {orderSchema} from '@/lib/validation'
 import {audit, notify, makeReference} from '@/lib/auth/audit'
 import {requireApiUser, isResponse} from '@/lib/auth/context'
 import {parseBody, clientMeta} from '@/lib/api'
+import type {OrderRow, PaymentRow, OrganisationRow} from '@/lib/db-types'
 
 /** GET — order history with payment state. */
 export async function GET() {
   const guard = await requireApiUser()
   if (isResponse(guard)) return guard.response
-  const orders = await db.order.findMany({
-    where: {userId: guard.ctx.user.id},
-    orderBy: {createdAt: 'desc'},
-    include: {payments: {orderBy: {createdAt: 'desc'}}},
-  })
+  const orderRows = unwrap<OrderRow[]>(
+    await supabase
+      .from('orders')
+      .select('*')
+      .eq('user_id', guard.ctx.user.id)
+      .order('created_at', {ascending: false}),
+    'orders.list',
+  )
+  // Payments per order — former Prisma `include` → follow-up query + JS join.
+  const paymentsByOrder = new Map<string, PaymentRow[]>()
+  if (orderRows.length > 0) {
+    const paymentRows = unwrap<PaymentRow[]>(
+      await supabase
+        .from('payments')
+        .select('*')
+        .in('order_id', orderRows.map((o) => o.id))
+        .order('created_at', {ascending: false}),
+      'payments.byOrders',
+    )
+    for (const row of paymentRows) {
+      const bucket = paymentsByOrder.get(row.order_id)
+      if (bucket) bucket.push(row)
+      else paymentsByOrder.set(row.order_id, [row])
+    }
+  }
+  const orders = orderRows.map((row) => ({
+    ...toCamel(row),
+    payments: toCamelList(paymentsByOrder.get(row.id) ?? []),
+  }))
   return NextResponse.json({ok: true, orders})
 }
 
@@ -38,30 +63,50 @@ export async function POST(req: NextRequest) {
   const payable = o.amountKes > 0 || o.amountUsd > 0
   const status = payable ? 'awaiting_payment' : 'processing'
 
-  const order = await db.order.create({
-    data: {
-      reference: makeReference('ORD'),
-      userId: ctx.user.id,
-      briefSource: o.briefSource,
-      sanityBriefId: o.sanityBriefId ?? null,
-      sanityOpportunityId: o.sanityOpportunityId ?? null,
-      briefTitle: o.briefTitle,
-      briefType: o.briefType,
-      format: o.format,
-      customScope: o.customScope ?? null,
-      amountKes: o.amountKes,
-      amountUsd: o.amountUsd,
-      currency: o.currency,
-      status,
-      paymentMethod: o.paymentMethod ?? null,
-      contactName: ctx.user.fullName,
-      contactEmail: ctx.user.email,
-      organisation: ctx.profile?.organisationId ? (await db.organisation.findUnique({where: {id: ctx.profile.organisationId}}))?.name ?? null : null,
-      shippingAddress: o.shippingAddress ?? null,
-      phone: o.phone ?? ctx.profile?.phone ?? null,
-      deliveryMethod: o.format === 'hard_copy' ? 'courier' : 'secure_download',
-    },
-  })
+  let organisation: string | null = null
+  if (ctx.profile?.organisationId) {
+    const orgRow = unwrapNullable<OrganisationRow>(
+      await supabase.from('organisations').select('*').eq('id', ctx.profile.organisationId).maybeSingle(),
+      'organisations.get',
+    )
+    organisation = orgRow?.name ?? null
+  }
+
+  const orderRow = unwrap<OrderRow>(
+    await supabase
+      .from('orders')
+      .insert(
+        toSnake({
+          id: newId(),
+          reference: makeReference('ORD'),
+          userId: ctx.user.id,
+          briefSource: o.briefSource,
+          sanityBriefId: o.sanityBriefId ?? null,
+          sanityOpportunityId: o.sanityOpportunityId ?? null,
+          briefTitle: o.briefTitle,
+          briefType: o.briefType,
+          format: o.format,
+          customScope: o.customScope ?? null,
+          amountKes: o.amountKes,
+          amountUsd: o.amountUsd,
+          currency: o.currency,
+          status,
+          paymentMethod: o.paymentMethod ?? null,
+          contactName: ctx.user.fullName,
+          contactEmail: ctx.user.email,
+          organisation,
+          shippingAddress: o.shippingAddress ?? null,
+          phone: o.phone ?? ctx.profile?.phone ?? null,
+          deliveryMethod: o.format === 'hard_copy' ? 'courier' : 'secure_download',
+          createdAt: nowIso(),
+          updatedAt: nowIso(),
+        }),
+      )
+      .select('*')
+      .single(),
+    'orders.create',
+  )
+  const order = toCamel(orderRow)
 
   await notify({
     userId: ctx.user.id,

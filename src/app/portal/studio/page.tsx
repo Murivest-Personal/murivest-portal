@@ -1,5 +1,6 @@
 import type {Metadata} from 'next'
-import {db} from '@/lib/db'
+import {supabase, unwrap, unwrapNullable, toCamel, toCamelList} from '@/lib/supabase'
+import type {InvestorProfileRow, ScenarioRow} from '@/lib/db-types'
 import {requirePortalUser} from '@/lib/auth/context'
 import {getCriteria} from '@/lib/portal/data'
 import {getOpportunityById} from '@/lib/sanity/queries'
@@ -28,8 +29,23 @@ export default async function StudioPage({
 
   const [criteria, scenarios, equityDefault] = await Promise.all([
     getCriteria(uid),
-    db.scenario.findMany({where: {userId: uid}, orderBy: {updatedAt: 'desc'}}),
-    db.investorProfile.findUnique({where: {userId: uid}, select: {equityAvailable: true, capitalCurrency: true}}),
+    supabase
+      .from('scenarios')
+      .select('*')
+      .eq('user_id', uid)
+      .order('updated_at', {ascending: false})
+      .then((res) => toCamelList(unwrap<ScenarioRow[]>(res, 'scenarios.list'))),
+    supabase
+      .from('investor_profiles')
+      .select('equity_available, capital_currency')
+      .eq('user_id', uid)
+      .maybeSingle()
+      .then((res) => {
+        const row = unwrapNullable<
+          Pick<InvestorProfileRow, 'equity_available' | 'capital_currency'>
+        >(res, 'investorProfile.byUser')
+        return row ? toCamel(row) : null
+      }),
   ])
 
   // Optional prefill: from an opportunity (?opportunity=<sanityId>) or a
@@ -72,7 +88,7 @@ export default async function StudioPage({
     inputs: s.inputs as ScenarioInputs,
     summary: (s.summary as SavedSummary) ?? null,
     notes: s.notes,
-    updatedAt: s.updatedAt.toISOString(),
+    updatedAt: s.updatedAt,
   }))
 
   const initialTab = (val('tab') === 'criteria' ? 'criteria' : openSavedScenario ? 'saved' : 'model') as 'criteria' | 'saved' | 'model'

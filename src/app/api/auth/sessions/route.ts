@@ -1,10 +1,17 @@
 import {NextResponse, type NextRequest} from 'next/server'
 import {z} from 'zod'
-import {db} from '@/lib/db'
+import {supabase, unwrap, unwrapNullable, toCamelList, nowIso} from '@/lib/supabase'
 import {revokeSession, revokeAllSessions} from '@/lib/auth/login'
 import {audit} from '@/lib/auth/audit'
 import {requireApiUser, isResponse} from '@/lib/auth/context'
 import {fail, clientMeta} from '@/lib/api'
+import type {SessionRow} from '@/lib/db-types'
+
+/** Column subset for the Account & Security session list (snake_case, DB shape). */
+type SessionListRow = Pick<
+  SessionRow,
+  'id' | 'device' | 'ip' | 'user_agent' | 'created_at' | 'last_seen_at' | 'expires_at'
+>
 
 const bodySchema = z.object({
   action: z.enum(['revoke', 'revoke_all']),
@@ -16,11 +23,18 @@ export async function GET() {
   const guard = await requireApiUser()
   if (isResponse(guard)) return guard.response
   const {ctx} = guard
-  const sessions = await db.session.findMany({
-    where: {userId: ctx.user.id, revokedAt: null, expiresAt: {gt: new Date()}},
-    orderBy: {lastSeenAt: 'desc'},
-    select: {id: true, device: true, ip: true, userAgent: true, createdAt: true, lastSeenAt: true, expiresAt: true},
-  })
+  const sessions = toCamelList(
+    unwrap<SessionListRow[]>(
+      await supabase
+        .from('sessions')
+        .select('id, device, ip, user_agent, created_at, last_seen_at, expires_at')
+        .eq('user_id', ctx.user.id)
+        .is('revoked_at', null)
+        .gt('expires_at', nowIso())
+        .order('last_seen_at', {ascending: false}),
+      'sessions.list',
+    ),
+  )
   return NextResponse.json({
     ok: true,
     current: ctx.session.id,
@@ -43,7 +57,15 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ok: true})
   }
   if (parsed.data.action === 'revoke' && parsed.data.sessionId) {
-    const target = await db.session.findFirst({where: {id: parsed.data.sessionId, userId: ctx.user.id}})
+    const target = unwrapNullable<SessionRow>(
+      await supabase
+        .from('sessions')
+        .select('*')
+        .eq('id', parsed.data.sessionId)
+        .eq('user_id', ctx.user.id)
+        .maybeSingle(),
+      'session.byId',
+    )
     if (!target) return fail('Session not found.', 404)
     await revokeSession(target.id)
     await audit({actorId: ctx.user.id, action: 'auth.session_revoked', entity: 'session', entityId: target.id, ...meta})

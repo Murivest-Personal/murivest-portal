@@ -1,4 +1,5 @@
-import {db} from '@/lib/db'
+import {supabase, unwrap, unwrapNullable, toCamel, toSnake, nowIso, newId} from '@/lib/supabase'
+import type {EmailTemplateRow, EmailTemplateVersionRow} from '@/lib/db-types'
 import {COMPANY} from '@/lib/constants'
 import {EMAIL_TEMPLATES} from './email-defaults'
 
@@ -31,8 +32,17 @@ export function baseVars(extra: Record<string, string>): Record<string, string> 
 /** Resolve + render a template for a given key (DB row wins over code default). */
 export async function renderEmail(key: string, vars: Record<string, string>): Promise<RenderedEmail> {
   const fallback = EMAIL_TEMPLATES[key]
-  const row = await db.emailTemplate.findUnique({where: {key}}).catch(() => null)
-  const active = row && row.isActive ? row : null
+  // DB hiccup falls back to the code default (was .catch(() => null)).
+  let row: EmailTemplateRow | null = null
+  try {
+    row = unwrapNullable<EmailTemplateRow>(
+      await supabase.from('email_templates').select('*').eq('key', key).maybeSingle(),
+      'emailTemplates.byKey',
+    )
+  } catch {
+    row = null
+  }
+  const active = row && row.is_active ? toCamel(row) : null
 
   const subject = active?.subject ?? fallback?.subject ?? 'Murivest portal notification'
   const preheader = active?.preheader ?? fallback?.preheader ?? ''
@@ -63,49 +73,86 @@ export async function saveEmailTemplate(params: {
   isActive: boolean
   savedById: string
 }): Promise<{version: number}> {
-  const existing = await db.emailTemplate.findUnique({where: {key: params.key}})
+  const existingRow = unwrapNullable<EmailTemplateRow>(
+    await supabase.from('email_templates').select('*').eq('key', params.key).maybeSingle(),
+    'emailTemplates.byKey',
+  )
+  const existing = existingRow ? toCamel(existingRow) : null
   const fallback = EMAIL_TEMPLATES[params.key]
 
   if (!existing && !fallback) {
     throw new Error(`Unknown template key: ${params.key}`)
   }
 
-  const row = await db.emailTemplate.upsert({
-    where: {key: params.key},
-    create: {
-      key: params.key,
-      category: params.category,
-      subject: params.subject,
-      preheader: params.preheader ?? null,
-      bodyHtml: params.bodyHtml,
-      bodyText: params.bodyText,
-      isActive: params.isActive,
-      version: 1,
-      updatedById: params.savedById,
-    },
-    update: {
-      category: params.category,
-      subject: params.subject,
-      preheader: params.preheader ?? null,
-      bodyHtml: params.bodyHtml,
-      bodyText: params.bodyText,
-      isActive: params.isActive,
-      version: {increment: 1},
-      updatedById: params.savedById,
-    },
-  })
+  // NOTE: sequential read-then-write — Prisma's atomic version increment has
+  // no PostgREST equivalent (no multi-statement tx over PostgREST).
+  const nextVersion = existing ? existing.version + 1 : 1
+  const templateRow = existing
+    ? unwrap<EmailTemplateRow>(
+        await supabase
+          .from('email_templates')
+          .update(
+            toSnake({
+              category: params.category,
+              subject: params.subject,
+              preheader: params.preheader ?? null,
+              bodyHtml: params.bodyHtml,
+              bodyText: params.bodyText,
+              isActive: params.isActive,
+              version: nextVersion,
+              updatedById: params.savedById,
+            }),
+          )
+          .eq('key', params.key)
+          .select('*')
+          .single(),
+        'emailTemplates.update',
+      )
+    : unwrap<EmailTemplateRow>(
+        await supabase
+          .from('email_templates')
+          .insert(
+            toSnake({
+              id: newId(),
+              key: params.key,
+              category: params.category,
+              subject: params.subject,
+              preheader: params.preheader ?? null,
+              bodyHtml: params.bodyHtml,
+              bodyText: params.bodyText,
+              isActive: params.isActive,
+              version: 1,
+              updatedById: params.savedById,
+              createdAt: nowIso(),
+              updatedAt: nowIso(),
+            }),
+          )
+          .select('*')
+          .single(),
+        'emailTemplates.create',
+      )
+  const template = toCamel(templateRow)
 
-  await db.emailTemplateVersion.create({
-    data: {
-      templateId: row.id,
-      version: row.version,
-      subject: params.subject,
-      preheader: params.preheader ?? null,
-      bodyHtml: params.bodyHtml,
-      bodyText: params.bodyText,
-      savedById: params.savedById,
-    },
-  })
+  unwrap<EmailTemplateVersionRow>(
+    await supabase
+      .from('email_template_versions')
+      .insert(
+        toSnake({
+          id: newId(),
+          templateId: template.id,
+          version: template.version,
+          subject: params.subject,
+          preheader: params.preheader ?? null,
+          bodyHtml: params.bodyHtml,
+          bodyText: params.bodyText,
+          savedById: params.savedById,
+          createdAt: nowIso(),
+        }),
+      )
+      .select('*')
+      .single(),
+    'emailTemplateVersions.create',
+  )
 
-  return {version: row.version}
+  return {version: template.version}
 }

@@ -1,5 +1,22 @@
-import {db} from '@/lib/db'
+import {supabase, unwrap, unwrapCount, toCamelList, nowIso} from '@/lib/supabase'
 import {growth, inRange, avg, sum, type Period} from './period'
+import type {
+  ComparisonRow,
+  ContentMetaRow,
+  DocumentAccessLogRow,
+  EnquiryRow,
+  InvestorCriteriaRow,
+  InvestorProfileRow,
+  MandateRow,
+  MessageRow,
+  OpportunityViewRow,
+  OrderRow,
+  RevenueEventRow,
+  SavedOpportunityRow,
+  ScenarioRow,
+  SessionRow,
+  UserRow,
+} from '@/lib/db-types'
 
 /**
  * Comprehensive analytics layer for capital-allocation operations.
@@ -26,36 +43,70 @@ export async function executiveSnapshot(period: Period): Promise<{
   aovUsd: number | null
 }> {
   const [
-    investorProfiles,
+    investorProfileRows,
     registrations,
     prevRegistrations,
     verifiedCount,
     activeMandates,
     submittedMandates,
-    orders,
-    revenueEvents,
+    orderRows,
+    revenueEventRows,
   ] = await Promise.all([
-    db.investorProfile.findMany({select: {classification: true, userId: true, verificationStatus: true}}),
-    db.user.count({where: {role: 'investor', createdAt: {gte: period.from, lt: period.to}}}),
-    db.user.count({where: {role: 'investor', createdAt: {gte: period.prevFrom, lt: period.prevTo}}}),
-    db.investorProfile.count({where: {verificationStatus: 'verified'}}),
-    db.mandate.count({where: {status: 'active'}}),
-    db.mandate.count({where: {status: 'submitted'}}),
-    db.order.findMany({where: {}, select: {status: true, amountUsd: true, createdAt: true, deliveredAt: true}}),
-    db.revenueEvent.findMany({where: {recognisedAt: {gte: period.from, lt: period.to}}, select: {grossUsd: true}}),
+    unwrap<InvestorProfileRow[]>(await supabase.from('investor_profiles').select('*'), 'profiles.list'),
+    unwrapCount(
+      await supabase
+        .from('users')
+        .select('*', {count: 'exact', head: true})
+        .eq('role', 'investor')
+        .gte('created_at', period.from.toISOString())
+        .lt('created_at', period.to.toISOString()),
+      'users.count',
+    ),
+    unwrapCount(
+      await supabase
+        .from('users')
+        .select('*', {count: 'exact', head: true})
+        .eq('role', 'investor')
+        .gte('created_at', period.prevFrom.toISOString())
+        .lt('created_at', period.prevTo.toISOString()),
+      'users.count',
+    ),
+    unwrapCount(
+      await supabase.from('investor_profiles').select('*', {count: 'exact', head: true}).eq('verification_status', 'verified'),
+      'profiles.count',
+    ),
+    unwrapCount(await supabase.from('mandates').select('*', {count: 'exact', head: true}).eq('status', 'active'), 'mandates.count'),
+    unwrapCount(await supabase.from('mandates').select('*', {count: 'exact', head: true}).eq('status', 'submitted'), 'mandates.count'),
+    unwrap<OrderRow[]>(await supabase.from('orders').select('*'), 'orders.list'),
+    unwrap<RevenueEventRow[]>(
+      await supabase
+        .from('revenue_events')
+        .select('*')
+        .gte('recognised_at', period.from.toISOString())
+        .lt('recognised_at', period.to.toISOString()),
+      'revenue.list',
+    ),
   ])
+  const investorProfiles = toCamelList(investorProfileRows)
+  const orders = toCamelList(orderRows)
+  const revenueEvents = toCamelList(revenueEventRows)
 
   // Live users (status active) among profiled investors.
-  const activeUsers = await db.user.findMany({where: {role: 'investor', status: 'active'}, select: {id: true}})
-  const activeIds = new Set(activeUsers.map((u) => u.id))
+  const activeUserRows = unwrap<UserRow[]>(
+    await supabase.from('users').select('*').eq('role', 'investor').eq('status', 'active'),
+    'users.list',
+  )
+  const activeIds = new Set(activeUserRows.map((u) => u.id))
   const activeProfiles = investorProfiles.filter((p) => activeIds.has(p.userId))
   const byClass = (c: string) => activeProfiles.filter((p) => p.classification === c).length
 
   // Mandate pipeline value (weighted) — reuse the revenue module's logic inline.
-  const activeMandateRows = await db.mandate.findMany({
-    where: {status: 'active', currency: 'USD'},
-    select: {targetAllocationMin: true, targetAllocationMax: true, probability: true},
-  })
+  const activeMandateRows = toCamelList(
+    unwrap<MandateRow[]>(
+      await supabase.from('mandates').select('*').eq('status', 'active').eq('currency', 'USD'),
+      'mandates.list',
+    ),
+  )
   const midpoint = (lo: number | null, hi: number | null) => (lo == null && hi == null ? null : lo == null ? hi : hi == null ? lo : (lo + hi) / 2)
   let weightedUsd = 0
   let unweightedUsd = 0
@@ -82,7 +133,12 @@ export async function executiveSnapshot(period: Period): Promise<{
       source: 'sanity',
     }
   } else {
-    const metas = await db.contentMeta.findMany({where: {contentType: 'opportunity'}, select: {status: true, tags: true}})
+    const metas = toCamelList(
+      unwrap<ContentMetaRow[]>(
+        await supabase.from('content_meta').select('*').eq('content_type', 'opportunity'),
+        'contentMeta.list',
+      ),
+    )
     const tags = metas.flatMap((m) => (Array.isArray(m.tags) ? (m.tags as string[]) : []))
     oppMix = {
       live: metas.filter((m) => m.status === 'live').length,
@@ -96,10 +152,10 @@ export async function executiveSnapshot(period: Period): Promise<{
   }
 
   const open = orders.filter((o) => ['pending','awaiting_payment','payment_confirmed','processing','internal_review','ready'].includes(o.status))
-  const deliveredInPeriod = orders.filter((o) => o.deliveredAt && inRange(o.deliveredAt, period.from, period.to))
+  const deliveredInPeriod = orders.filter((o) => o.deliveredAt && inRange(new Date(o.deliveredAt), period.from, period.to))
   const fulfilmentHours = deliveredInPeriod
     .filter((o) => o.deliveredAt)
-    .map((o) => (o.deliveredAt!.getTime() - o.createdAt.getTime()) / 3600000)
+    .map((o) => (new Date(o.deliveredAt!).getTime() - new Date(o.createdAt).getTime()) / 3600000)
   const revenueUsd = sum(revenueEvents.map((e) => e.grossUsd))
 
   const totalInvestors = investorProfiles.length
@@ -135,19 +191,66 @@ export async function investorAnalytics(period: Period): Promise<{
   dormant: {userId: string; name: string; email: string; lastLoginAt: Date | null; daysSinceLogin: number | null; tier: string}[]
   engagementTotals: {logins: number; saved: number; scenarios: number}
 }> {
-  const [profiles, sessions, saves, scenarios, comparisons, orders, revenueEvents] = await Promise.all([
-    db.investorProfile.findMany({
-      select: {userId: true, classification: true, source: true, accessTier: true, verificationStatus: true, onboardingStep: true},
-    }),
-    db.session.findMany({where: {createdAt: {gte: period.from, lt: period.to}}, select: {userId: true}}),
-    db.savedOpportunity.findMany({where: {createdAt: {gte: period.from, lt: period.to}}, select: {userId: true}}),
-    db.scenario.findMany({where: {createdAt: {gte: period.from, lt: period.to}}, select: {userId: true}}),
-    db.comparison.findMany({where: {createdAt: {gte: period.from, lt: period.to}}, select: {userId: true}}),
-    db.user.findMany({where: {role: 'investor'}, select: {id: true, fullName: true, email: true, createdAt: true, emailVerifiedAt: true, lastLoginAt: true}}),
-    db.revenueEvent.findMany({select: {grossUsd: true, order: {select: {userId: true}}}}),
+  const [profileRows, sessionRows, savedRows, scenarioRows, comparisonRows, userRows, revenueEventRows] = await Promise.all([
+    unwrap<InvestorProfileRow[]>(await supabase.from('investor_profiles').select('*'), 'profiles.list'),
+    unwrap<SessionRow[]>(
+      await supabase
+        .from('sessions')
+        .select('*')
+        .gte('created_at', period.from.toISOString())
+        .lt('created_at', period.to.toISOString()),
+      'sessions.list',
+    ),
+    unwrap<SavedOpportunityRow[]>(
+      await supabase
+        .from('saved_opportunities')
+        .select('*')
+        .gte('created_at', period.from.toISOString())
+        .lt('created_at', period.to.toISOString()),
+      'savedOpportunities.list',
+    ),
+    unwrap<ScenarioRow[]>(
+      await supabase
+        .from('scenarios')
+        .select('*')
+        .gte('created_at', period.from.toISOString())
+        .lt('created_at', period.to.toISOString()),
+      'scenarios.list',
+    ),
+    unwrap<ComparisonRow[]>(
+      await supabase
+        .from('comparisons')
+        .select('*')
+        .gte('created_at', period.from.toISOString())
+        .lt('created_at', period.to.toISOString()),
+      'comparisons.list',
+    ),
+    unwrap<UserRow[]>(await supabase.from('users').select('*').eq('role', 'investor'), 'users.list'),
+    unwrap<RevenueEventRow[]>(await supabase.from('revenue_events').select('*'), 'revenue.list'),
   ])
+  const profiles = toCamelList(profileRows)
+  const sessions = toCamelList(sessionRows)
+  const saves = toCamelList(savedRows)
+  const scenarios = toCamelList(scenarioRows)
+  const comparisons = toCamelList(comparisonRows)
+  // Dates as Date objects (rows return ISO strings) for the period math below.
+  const users = userRows.map((u) => ({
+    id: u.id,
+    fullName: u.full_name,
+    email: u.email,
+    createdAt: new Date(u.created_at),
+    emailVerifiedAt: u.email_verified_at ? new Date(u.email_verified_at) : null,
+    lastLoginAt: u.last_login_at ? new Date(u.last_login_at) : null,
+  }))
+  // relation include (order) → separate query + JS join
+  const eventOrderRows = revenueEventRows.length
+    ? unwrap<OrderRow[]>(
+        await supabase.from('orders').select('*').in('id', [...new Set(revenueEventRows.map((e) => e.order_id))]),
+        'orders.list',
+      )
+    : []
+  const eventOrderBy = new Map(eventOrderRows.map((o) => [o.id, o]))
 
-  const users = orders
   const byId = new Map(users.map((u) => [u.id, u]))
   const profileByUser = new Map(profiles.map((p) => [p.userId, p]))
 
@@ -159,8 +262,11 @@ export async function investorAnalytics(period: Period): Promise<{
   }
 
   // Conversion funnel: Visit → Request Access → Verified → First Order / First Mandate
-  const orderUsers = new Set(revenueEvents.map((e) => e.order.userId))
-  const mandateUsers = new Set((await db.mandate.findMany({select: {userId: true}})).map((m) => m.userId))
+  const orderUsers = new Set(
+    revenueEventRows.map((e) => eventOrderBy.get(e.order_id)?.user_id).filter((x): x is string => !!x),
+  )
+  const mandateRows = unwrap<MandateRow[]>(await supabase.from('mandates').select('*'), 'mandates.list')
+  const mandateUsers = new Set(mandateRows.map((m) => m.user_id))
   const funnel = [
     {stage: 'Registered (visit → account)', count: users.length},
     {stage: 'Email verified', count: users.filter((u) => !!u.emailVerifiedAt).length},
@@ -200,11 +306,13 @@ export async function investorAnalytics(period: Period): Promise<{
 
   // High-value investors by recognised revenue
   const revenueByUser = new Map<string, {revenue: number; orders: number}>()
-  for (const e of revenueEvents) {
-    const cur = revenueByUser.get(e.order.userId) ?? {revenue: 0, orders: 0}
-    cur.revenue += e.grossUsd
+  for (const e of revenueEventRows) {
+    const uid = eventOrderBy.get(e.order_id)?.user_id
+    if (!uid) continue
+    const cur = revenueByUser.get(uid) ?? {revenue: 0, orders: 0}
+    cur.revenue += e.gross_usd
     cur.orders += 1
-    revenueByUser.set(e.order.userId, cur)
+    revenueByUser.set(uid, cur)
   }
   const highValue = [...revenueByUser.entries()]
     .map(([userId, v]) => ({
@@ -252,22 +360,67 @@ export async function opportunityAnalytics(period: Period): Promise<{
   demandByAssetClass: {label: string; count: number}[]
   demandByGeography: {label: string; count: number}[]
 }> {
-  const [views, saves, orders, revenueEvents, scenarios, comparisons, criteria] = await Promise.all([
-    db.opportunityView.findMany({where: {viewedAt: {gte: period.from, lt: period.to}}, select: {sanityId: true, userId: true}}),
-    db.savedOpportunity.findMany({where: {createdAt: {gte: period.from, lt: period.to}}, select: {sanityId: true}}),
-    db.order.findMany({where: {sanityOpportunityId: {not: null}}, select: {sanityOpportunityId: true, amountUsd: true, status: true}}),
-    db.revenueEvent.findMany({select: {grossUsd: true, order: {select: {sanityOpportunityId: true}}}}),
-    db.scenario.count({where: {createdAt: {gte: period.from, lt: period.to}}}),
-    db.comparison.count({where: {createdAt: {gte: period.from, lt: period.to}}}),
-    db.investorCriteria.findMany({select: {assetClasses: true, geographies: true}}),
+  const [viewRows, savedRows, orderRows, revenueEventRows, scenarios, comparisons, criteriaRows] = await Promise.all([
+    unwrap<OpportunityViewRow[]>(
+      await supabase
+        .from('opportunity_views')
+        .select('*')
+        .gte('viewed_at', period.from.toISOString())
+        .lt('viewed_at', period.to.toISOString()),
+      'opportunityViews.list',
+    ),
+    unwrap<SavedOpportunityRow[]>(
+      await supabase
+        .from('saved_opportunities')
+        .select('*')
+        .gte('created_at', period.from.toISOString())
+        .lt('created_at', period.to.toISOString()),
+      'savedOpportunities.list',
+    ),
+    unwrap<OrderRow[]>(
+      await supabase.from('orders').select('*').not('sanity_opportunity_id', 'is', null),
+      'orders.list',
+    ),
+    unwrap<RevenueEventRow[]>(await supabase.from('revenue_events').select('*'), 'revenue.list'),
+    unwrapCount(
+      await supabase
+        .from('scenarios')
+        .select('*', {count: 'exact', head: true})
+        .gte('created_at', period.from.toISOString())
+        .lt('created_at', period.to.toISOString()),
+      'scenarios.count',
+    ),
+    unwrapCount(
+      await supabase
+        .from('comparisons')
+        .select('*', {count: 'exact', head: true})
+        .gte('created_at', period.from.toISOString())
+        .lt('created_at', period.to.toISOString()),
+      'comparisons.count',
+    ),
+    unwrap<InvestorCriteriaRow[]>(await supabase.from('investor_criteria').select('*'), 'criteria.list'),
   ])
+  const views = toCamelList(viewRows)
+  const saves = toCamelList(savedRows)
+  const orders = toCamelList(orderRows)
+  const criteria = toCamelList(criteriaRows)
+  // relation include (order) → separate query + JS join
+  const eventOrderRows = revenueEventRows.length
+    ? unwrap<OrderRow[]>(
+        await supabase.from('orders').select('*').in('id', [...new Set(revenueEventRows.map((e) => e.order_id))]),
+        'orders.list',
+      )
+    : []
+  const eventOrderBy = new Map(eventOrderRows.map((o) => [o.id, o]))
 
   const {getAdminOpportunities} = await import('./queries')
   const sanityOps = await getAdminOpportunities()
   const titles = new Map(sanityOps.map((o) => [o._id, o.title]))
-  const metaTitles = new Map(
-    (await db.contentMeta.findMany({where: {contentType: 'opportunity'}, select: {sanityId: true, title: true}})).map((m) => [m.sanityId, m.title]),
+  const metaRows = unwrap<ContentMetaRow[]>(
+    await supabase.from('content_meta').select('*').eq('content_type', 'opportunity'),
+    'contentMeta.list',
   )
+  const metaTitles = new Map(metaRows.map((m) => [m.sanity_id, m.title]))
   const titleOf = (id: string) => titles.get(id) ?? metaTitles.get(id) ?? null
 
   const viewsBy = new Map<string, {views: number; viewers: Set<string>}>()
@@ -285,10 +438,10 @@ export async function opportunityAnalytics(period: Period): Promise<{
     ordersBy.set(id, (ordersBy.get(id) ?? 0) + 1)
   }
   const revenueBy = new Map<string, number>()
-  for (const e of revenueEvents) {
-    const id = e.order.sanityOpportunityId
+  for (const e of revenueEventRows) {
+    const id = eventOrderBy.get(e.order_id)?.sanity_opportunity_id
     if (!id) continue
-    revenueBy.set(id, (revenueBy.get(id) ?? 0) + e.grossUsd)
+    revenueBy.set(id, (revenueBy.get(id) ?? 0) + e.gross_usd)
   }
 
   const allIds = new Set<string>([...viewsBy.keys(), ...savesBy.keys(), ...ordersBy.keys(), ...titles.keys()])
@@ -355,13 +508,36 @@ export async function orderAnalytics(period: Period): Promise<{
   briefTypePerformance: {briefType: string; count: number; valueUsd: number; revenueUsd: number}[]
   avgOrderValueUsd: number | null
 }> {
-  const [orders, revenueEvents, views] = await Promise.all([
-    db.order.findMany({select: {createdAt: true, status: true, amountUsd: true, briefType: true, briefSource: true, userId: true, deliveredAt: true, sanityOpportunityId: true}}),
-    db.revenueEvent.findMany({where: {recognisedAt: {gte: period.from, lt: period.to}}, select: {grossUsd: true, order: {select: {briefType: true}}}}),
-    db.opportunityView.count({where: {viewedAt: {gte: period.from, lt: period.to}}}),
+  const [orderRows, revenueEventRows, views] = await Promise.all([
+    unwrap<OrderRow[]>(await supabase.from('orders').select('*'), 'orders.list'),
+    unwrap<RevenueEventRow[]>(
+      await supabase
+        .from('revenue_events')
+        .select('*')
+        .gte('recognised_at', period.from.toISOString())
+        .lt('recognised_at', period.to.toISOString()),
+      'revenue.list',
+    ),
+    unwrapCount(
+      await supabase
+        .from('opportunity_views')
+        .select('*', {count: 'exact', head: true})
+        .gte('viewed_at', period.from.toISOString())
+        .lt('viewed_at', period.to.toISOString()),
+      'opportunityViews.count',
+    ),
   ])
+  const orders = toCamelList(orderRows)
+  // relation include (order) → separate query + JS join
+  const eventOrderRows = revenueEventRows.length
+    ? unwrap<OrderRow[]>(
+        await supabase.from('orders').select('*').in('id', [...new Set(revenueEventRows.map((e) => e.order_id))]),
+        'orders.list',
+      )
+    : []
+  const eventOrderBy = new Map(eventOrderRows.map((o) => [o.id, o]))
 
-  const inPeriod = orders.filter((o) => inRange(o.createdAt, period.from, period.to))
+  const inPeriod = orders.filter((o) => inRange(new Date(o.createdAt), period.from, period.to))
 
   // Volume / value series
   const dayMs = 86400000
@@ -371,7 +547,10 @@ export async function orderAnalytics(period: Period): Promise<{
   for (let t = period.from.getTime(); t < period.to.getTime(); t += step * dayMs) {
     const bFrom = new Date(t)
     const bTo = new Date(Math.min(t + step * dayMs, period.to.getTime()))
-    const bucket = inPeriod.filter((o) => o.createdAt >= bFrom && o.createdAt < bTo)
+    const bucket = inPeriod.filter((o) => {
+      const at = new Date(o.createdAt)
+      return at >= bFrom && at < bTo
+    })
     series.push({
       label: bFrom.toLocaleDateString('en-GB', {day: 'numeric', month: 'short'}),
       count: bucket.length,
@@ -389,8 +568,8 @@ export async function orderAnalytics(period: Period): Promise<{
   }
 
   // Fulfilment time for orders delivered in period
-  const delivered = orders.filter((o) => o.deliveredAt && inRange(o.deliveredAt, period.from, period.to))
-  const avgFulfilmentDays = avg(delivered.map((o) => (o.deliveredAt!.getTime() - o.createdAt.getTime()) / 86400000))
+  const delivered = orders.filter((o) => o.deliveredAt && inRange(new Date(o.deliveredAt), period.from, period.to))
+  const avgFulfilmentDays = avg(delivered.map((o) => (new Date(o.deliveredAt!).getTime() - new Date(o.createdAt).getTime()) / 86400000))
 
   // Conversion from opportunity view → order (period)
   const ordersFromViews = inPeriod.filter((o) => !!o.sanityOpportunityId).length
@@ -411,9 +590,9 @@ export async function orderAnalytics(period: Period): Promise<{
     cur.valueUsd += o.amountUsd
     typeMap.set(o.briefType, cur)
   }
-  for (const e of revenueEvents) {
-    const cur = typeMap.get(e.order.briefType)
-    if (cur) cur.revenueUsd += e.grossUsd
+  for (const e of revenueEventRows) {
+    const cur = typeMap.get(eventOrderBy.get(e.order_id)?.brief_type ?? '')
+    if (cur) cur.revenueUsd += e.gross_usd
   }
 
   return {
@@ -442,9 +621,8 @@ export async function mandateAnalytics(period: Period): Promise<{
   byAdvisor: {advisorId: string | null; name: string; active: number; weightedUsd: number}[]
   stageDistribution: {stage: string; count: number; weightedUsd: number}[]
 }> {
-  const mandates = await db.mandate.findMany({
-    select: {status: true, stage: true, probability: true, targetAllocationMin: true, targetAllocationMax: true, currency: true, advisorId: true, createdAt: true, submittedAt: true, activatedAt: true, closedAt: true},
-  })
+  const mandateRows = unwrap<MandateRow[]>(await supabase.from('mandates').select('*'), 'mandates.list')
+  const mandates = toCamelList(mandateRows)
 
   const statusMap = new Map<string, number>()
   for (const m of mandates) statusMap.set(m.status, (statusMap.get(m.status) ?? 0) + 1)
@@ -479,14 +657,16 @@ export async function mandateAnalytics(period: Period): Promise<{
   const winRatePct = closed + rejected > 0 ? Math.round((closed / (closed + rejected)) * 1000) / 10 : null
 
   const activated = mandates.filter((m) => m.submittedAt && m.activatedAt)
-  const avgDaysToActivate = avg(activated.map((m) => (m.activatedAt!.getTime() - m.submittedAt!.getTime()) / 86400000))
+  const avgDaysToActivate = avg(activated.map((m) => (new Date(m.activatedAt!).getTime() - new Date(m.submittedAt!).getTime()) / 86400000))
   const closedRows = mandates.filter((m) => m.activatedAt && m.closedAt)
-  const avgDaysToClose = avg(closedRows.map((m) => (m.closedAt!.getTime() - m.activatedAt!.getTime()) / 86400000))
+  const avgDaysToClose = avg(closedRows.map((m) => (new Date(m.closedAt!).getTime() - new Date(m.activatedAt!).getTime()) / 86400000))
 
   // Advisor attribution
   const advisorIds = [...new Set(mandates.map((m) => m.advisorId).filter((x): x is string => !!x))]
-  const advisors = advisorIds.length ? await db.user.findMany({where: {id: {in: advisorIds}}, select: {id: true, fullName: true, email: true}}) : []
-  const advisorNames = new Map(advisors.map((a) => [a.id, a.fullName || a.email]))
+  const advisorRows = advisorIds.length
+    ? unwrap<UserRow[]>(await supabase.from('users').select('*').in('id', advisorIds), 'users.list')
+    : []
+  const advisorNames = new Map(advisorRows.map((a) => [a.id, a.full_name || a.email]))
   const byAdvisorMap = new Map<string | null, {active: number; weighted: number}>()
   for (const m of mandates.filter((x) => x.status === 'active')) {
     const mid = midpoint(m)
@@ -536,14 +716,48 @@ export async function operationalHealth(period: Period): Promise<{
   activeSessions: number
   failedLogins: number
 }> {
-  const [enquiries, messages, accessLogs, sessions, activeSessions, failedLogins] = await Promise.all([
-    db.enquiry.findMany({select: {id: true, createdAt: true, status: true, userId: true}}),
-    db.message.findMany({select: {enquiryId: true, senderType: true, createdAt: true}}),
-    db.documentAccessLog.findMany({where: {createdAt: {gte: period.from, lt: period.to}}, select: {sanityDocumentId: true, documentTitle: true, action: true}}),
-    db.session.findMany({where: {createdAt: {gte: period.from, lt: period.to}}, select: {createdAt: true}}),
-    db.session.count({where: {revokedAt: null, expiresAt: {gt: new Date()}}}),
-    db.securityEvent.count({where: {type: 'login_failed', createdAt: {gte: period.from, lt: period.to}}}),
+  const [enquiryRows, messageRows, accessLogRows, sessionRows, activeSessions, failedLogins] = await Promise.all([
+    unwrap<EnquiryRow[]>(await supabase.from('enquiries').select('*'), 'enquiries.list'),
+    unwrap<MessageRow[]>(await supabase.from('messages').select('*'), 'messages.list'),
+    unwrap<DocumentAccessLogRow[]>(
+      await supabase
+        .from('document_access_logs')
+        .select('*')
+        .gte('created_at', period.from.toISOString())
+        .lt('created_at', period.to.toISOString()),
+      'docAccessLogs.list',
+    ),
+    unwrap<SessionRow[]>(
+      await supabase
+        .from('sessions')
+        .select('*')
+        .gte('created_at', period.from.toISOString())
+        .lt('created_at', period.to.toISOString()),
+      'sessions.list',
+    ),
+    unwrapCount(
+      await supabase
+        .from('sessions')
+        .select('*', {count: 'exact', head: true})
+        .is('revoked_at', null)
+        .gt('expires_at', nowIso()),
+      'sessions.countActive',
+    ),
+    unwrapCount(
+      await supabase
+        .from('security_events')
+        .select('*', {count: 'exact', head: true})
+        .eq('type', 'login_failed')
+        .gte('created_at', period.from.toISOString())
+        .lt('created_at', period.to.toISOString()),
+      'securityEvents.count',
+    ),
   ])
+  const enquiries = toCamelList(enquiryRows)
+  // First-response maths needs Date objects (rows return ISO strings).
+  const messages = messageRows.map((m) => ({enquiryId: m.enquiry_id, senderType: m.sender_type, createdAt: new Date(m.created_at)}))
+  const accessLogs = toCamelList(accessLogRows)
+  const sessions = toCamelList(sessionRows)
 
   // First-response time: enquiry creation → first advisor/system reply
   const firstReplyByEnquiry = new Map<string, Date>()
@@ -553,7 +767,7 @@ export async function operationalHealth(period: Period): Promise<{
     if (!cur || m.createdAt < cur) firstReplyByEnquiry.set(m.enquiryId, m.createdAt)
   }
   const responded = enquiries.filter((e) => firstReplyByEnquiry.has(e.id))
-  const avgFirstResponseHours = avg(responded.map((e) => (firstReplyByEnquiry.get(e.id)!.getTime() - e.createdAt.getTime()) / 3600000))
+  const avgFirstResponseHours = avg(responded.map((e) => (firstReplyByEnquiry.get(e.id)!.getTime() - new Date(e.createdAt).getTime()) / 3600000))
 
   const docMap = new Map<string, {title: string | null; views: number; downloads: number}>()
   for (const l of accessLogs) {
@@ -571,7 +785,10 @@ export async function operationalHealth(period: Period): Promise<{
     const bTo = new Date(t + dayMs)
     sessionSeries.push({
       label: bFrom.toLocaleDateString('en-GB', {day: 'numeric', month: 'short'}),
-      count: sessions.filter((s) => s.createdAt >= bFrom && s.createdAt < bTo).length,
+      count: sessions.filter((s) => {
+        const at = new Date(s.createdAt)
+        return at >= bFrom && at < bTo
+      }).length,
     })
   }
 
@@ -595,12 +812,24 @@ export async function operationalHealth(period: Period): Promise<{
 // ---------------------------------------------------------------------------
 
 export async function advisorPerformance(period: Period): Promise<{advisorId: string; name: string; assignedInvestors: number; activeMandates: number; ordersSupported: number; revenueUsd: number}[]> {
-  const [advisors, profiles, mandates, revenueEvents] = await Promise.all([
-    db.user.findMany({where: {role: {in: ['advisor', 'admin']}}, select: {id: true, fullName: true, email: true, role: true}}),
-    db.investorProfile.findMany({select: {advisorId: true}}),
-    db.mandate.findMany({where: {status: 'active'}, select: {advisorId: true, userId: true}}),
-    db.revenueEvent.findMany({select: {grossUsd: true, order: {select: {userId: true, advisorId: true}}}}),
+  const [advisorRows, profileRows, mandateRows, revenueEventRows] = await Promise.all([
+    unwrap<UserRow[]>(await supabase.from('users').select('*').in('role', ['advisor', 'admin']), 'users.list'),
+    unwrap<InvestorProfileRow[]>(await supabase.from('investor_profiles').select('*'), 'profiles.list'),
+    unwrap<MandateRow[]>(await supabase.from('mandates').select('*').eq('status', 'active'), 'mandates.list'),
+    unwrap<RevenueEventRow[]>(await supabase.from('revenue_events').select('*'), 'revenue.list'),
   ])
+  // relation include (order) → separate query + JS join
+  const eventOrderRows = revenueEventRows.length
+    ? unwrap<OrderRow[]>(
+        await supabase.from('orders').select('*').in('id', [...new Set(revenueEventRows.map((e) => e.order_id))]),
+        'orders.list',
+      )
+    : []
+  const eventOrderBy = new Map(eventOrderRows.map((o) => [o.id, o]))
+
+  const advisors = advisorRows.map((a) => ({id: a.id, fullName: a.full_name, email: a.email, role: a.role}))
+  const profiles = profileRows.map((p) => ({userId: p.user_id, advisorId: p.advisor_id}))
+  const mandates = mandateRows.map((m) => ({advisorId: m.advisor_id, userId: m.user_id}))
 
   const profileAdvisor = new Map(profiles.filter((p) => p.advisorId).map((p) => [p.userId, p.advisorId!]))
   const mandateAdvisor = new Map(mandates.filter((m) => m.advisorId).map((m) => [m.userId, m.advisorId!]))
@@ -611,11 +840,12 @@ export async function advisorPerformance(period: Period): Promise<{advisorId: st
     const activeMandates = mandates.filter((m) => m.advisorId === id).length
     let ordersSupported = 0
     let revenueUsd = 0
-    for (const e of revenueEvents) {
-      const attr = e.order.advisorId ?? profileAdvisor.get(e.order.userId) ?? mandateAdvisor.get(e.order.userId)
+    for (const e of revenueEventRows) {
+      const orderRow = eventOrderBy.get(e.order_id)
+      const attr = orderRow ? orderRow.advisor_id ?? profileAdvisor.get(orderRow.user_id) ?? mandateAdvisor.get(orderRow.user_id) : undefined
       if (attr === id) {
         ordersSupported += 1
-        revenueUsd += e.grossUsd
+        revenueUsd += e.gross_usd
       }
     }
     return {advisorId: id, name: a.fullName || a.email, assignedInvestors, activeMandates, ordersSupported, revenueUsd: Math.round(revenueUsd * 100) / 100}

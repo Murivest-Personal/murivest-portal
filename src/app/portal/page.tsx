@@ -1,6 +1,18 @@
 import type {Metadata} from 'next'
 import Link from 'next/link'
-import {db} from '@/lib/db'
+import {supabase, unwrap, unwrapNullable, unwrapCount, toCamel, toCamelList} from '@/lib/supabase'
+import type {
+  CapitalCallRow,
+  DocumentRequestRow,
+  EnquiryRow,
+  MandateRow,
+  OpportunityViewRow,
+  OrderRow,
+  PortfolioPositionRow,
+  SavedOpportunityRow,
+  ScenarioRow,
+  UserRow,
+} from '@/lib/db-types'
 import {
   ArrowRight,
   BadgeCheck,
@@ -35,19 +47,81 @@ export default async function PortalOverviewPage() {
   const ctx = await requirePortalUser()
   const uid = ctx.user.id
 
+  const advisorId = ctx.profile?.advisorId || null
+
   const [criteria, savedIds, recentViews, orders, mandates, scenarios, positions, docRequests, unreadNotifications, latestEnquiries, advisor] =
     await Promise.all([
       getCriteria(uid),
-      db.savedOpportunity.findMany({where: {userId: uid}, select: {sanityId: true}}).then((rows) => new Set(rows.map((r) => r.sanityId))),
-      db.opportunityView.findMany({where: {userId: uid}, orderBy: {viewedAt: 'desc'}, take: 5, select: {sanityId: true, viewedAt: true}}),
-      db.order.findMany({where: {userId: uid}, orderBy: {createdAt: 'desc'}, take: 5}),
-      db.mandate.findMany({where: {userId: uid}, orderBy: {updatedAt: 'desc'}, take: 4}),
-      db.scenario.findMany({where: {userId: uid}, orderBy: {updatedAt: 'desc'}, take: 4}),
-      db.portfolioPosition.findMany({where: {userId: uid}, take: 12}),
-      db.documentRequest.findMany({where: {userId: uid}, orderBy: {createdAt: 'desc'}, take: 3}),
-      db.notification.count({where: {userId: uid, readAt: null}}),
-      db.enquiry.findMany({where: {userId: uid}, orderBy: {updatedAt: 'desc'}, take: 3}),
-      ctx.profile?.advisorId ? db.user.findUnique({where: {id: ctx.profile.advisorId}, select: {fullName: true, email: true}}) : Promise.resolve(null),
+      supabase
+        .from('saved_opportunities')
+        .select('sanity_id')
+        .eq('user_id', uid)
+        .then((res) => new Set(unwrap<Pick<SavedOpportunityRow, 'sanity_id'>[]>(res, 'savedOpportunities.ids').map((r) => r.sanity_id))),
+      supabase
+        .from('opportunity_views')
+        .select('sanity_id, viewed_at')
+        .eq('user_id', uid)
+        .order('viewed_at', {ascending: false})
+        .limit(5)
+        .then((res) => toCamelList(unwrap<Pick<OpportunityViewRow, 'sanity_id' | 'viewed_at'>[]>(res, 'opportunityViews.recent'))),
+      supabase
+        .from('orders')
+        .select('*')
+        .eq('user_id', uid)
+        .order('created_at', {ascending: false})
+        .limit(5)
+        .then((res) => toCamelList(unwrap<OrderRow[]>(res, 'orders.recent'))),
+      supabase
+        .from('mandates')
+        .select('*')
+        .eq('user_id', uid)
+        .order('updated_at', {ascending: false})
+        .limit(4)
+        .then((res) => toCamelList(unwrap<MandateRow[]>(res, 'mandates.recent'))),
+      supabase
+        .from('scenarios')
+        .select('*')
+        .eq('user_id', uid)
+        .order('updated_at', {ascending: false})
+        .limit(4)
+        .then((res) => toCamelList(unwrap<ScenarioRow[]>(res, 'scenarios.recent'))),
+      supabase
+        .from('portfolio_positions')
+        .select('*')
+        .eq('user_id', uid)
+        .limit(12)
+        .then((res) => toCamelList(unwrap<PortfolioPositionRow[]>(res, 'positions.recent'))),
+      supabase
+        .from('document_requests')
+        .select('*')
+        .eq('user_id', uid)
+        .order('created_at', {ascending: false})
+        .limit(3)
+        .then((res) => toCamelList(unwrap<DocumentRequestRow[]>(res, 'documentRequests.recent'))),
+      supabase
+        .from('notifications')
+        .select('*', {count: 'exact', head: true})
+        .eq('user_id', uid)
+        .is('read_at', null)
+        .then((res) => unwrapCount(res, 'notifications.unread')),
+      supabase
+        .from('enquiries')
+        .select('*')
+        .eq('user_id', uid)
+        .order('updated_at', {ascending: false})
+        .limit(3)
+        .then((res) => toCamelList(unwrap<EnquiryRow[]>(res, 'enquiries.recent'))),
+      advisorId
+        ? supabase
+            .from('users')
+            .select('full_name, email')
+            .eq('id', advisorId)
+            .maybeSingle()
+            .then((res) => {
+              const row = unwrapNullable<Pick<UserRow, 'full_name' | 'email'>>(res, 'users.advisor')
+              return row ? toCamel(row) : null
+            })
+        : Promise.resolve(null),
     ])
 
   // Recommended opportunities (permission-filtered, criteria-scored)
@@ -59,21 +133,39 @@ export default async function PortalOverviewPage() {
     .slice(0, 3)
 
   // View counts for "high interest" signal
+  // (former groupBy → column read + JS aggregation)
   const viewCounts = new Map<string, number>()
-  const grouped = await db.opportunityView.groupBy({by: ['sanityId'], _count: {_all: true}})
-  for (const g of grouped) viewCounts.set(g.sanityId, g._count._all)
+  const grouped = unwrap<Pick<OpportunityViewRow, 'sanity_id'>[]>(
+    await supabase.from('opportunity_views').select('sanity_id'),
+    'opportunityViews.counts',
+  )
+  for (const g of grouped) viewCounts.set(g.sanity_id, (viewCounts.get(g.sanity_id) ?? 0) + 1)
 
   const savedOpportunities = opportunities.filter((o) => savedIds.has(o._id)).slice(0, 3)
   const recentOpportunityIds = recentViews.map((v) => v.sanityId)
 
   const activeOrders = orders.filter((o) => !['delivered', 'cancelled'].includes(o.status))
   const activeMandates = mandates.filter((m) => !['draft'].includes(m.status))
-  const capitalCallsDue = await db.capitalCall.findMany({
-    where: {position: {userId: uid}, status: {in: ['scheduled', 'called']}},
-    include: {position: true},
-    orderBy: {dueDate: 'asc'},
-    take: 3,
-  })
+  // relation include (position) → separate query + JS join
+  const capitalPositionRows = unwrap<Pick<PortfolioPositionRow, 'id' | 'name'>[]>(
+    await supabase.from('portfolio_positions').select('id, name').eq('user_id', uid),
+    'positions.forCapitalCalls',
+  )
+  const positionNameById = new Map(capitalPositionRows.map((p) => [p.id, p.name]))
+  const capitalCallsDue = capitalPositionRows.length
+    ? toCamelList(
+        unwrap<CapitalCallRow[]>(
+          await supabase
+            .from('capital_calls')
+            .select('*')
+            .in('position_id', capitalPositionRows.map((p) => p.id))
+            .in('status', ['scheduled', 'called'])
+            .order('due_date', {ascending: true})
+            .limit(3),
+          'capitalCalls.due',
+        ),
+      ).map((c) => ({...c, position: {name: positionNameById.get(c.positionId) ?? ''}}))
+    : []
 
   const verificationSteps = [
     {label: 'Email verified', done: !!ctx.user.emailVerifiedAt},

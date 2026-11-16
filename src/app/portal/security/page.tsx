@@ -1,5 +1,6 @@
 import type {Metadata} from 'next'
-import {db} from '@/lib/db'
+import {supabase, unwrap, toCamelList, nowIso} from '@/lib/supabase'
+import type {SecurityEventRow as SecurityEventDbRow, SessionRow as SessionDbRow} from '@/lib/db-types'
 import {requirePortalUser} from '@/lib/auth/context'
 import SecurityPanel, {type SessionRow, type SecurityEventRow} from '@/components/portal/SecurityPanel'
 
@@ -14,20 +15,30 @@ export default async function SecurityPage() {
   const ctx = await requirePortalUser()
 
   const [sessions, events] = await Promise.all([
-    db.session.findMany({
-      where: {userId: ctx.user.id, revokedAt: null, expiresAt: {gt: new Date()}},
-      orderBy: {lastSeenAt: 'desc'},
-    }),
-    db.securityEvent.findMany({where: {userId: ctx.user.id}, orderBy: {createdAt: 'desc'}, take: 50}),
+    supabase
+      .from('sessions')
+      .select('*')
+      .eq('user_id', ctx.user.id)
+      .is('revoked_at', null)
+      .gt('expires_at', nowIso())
+      .order('last_seen_at', {ascending: false})
+      .then((res) => toCamelList(unwrap<SessionDbRow[]>(res, 'sessions.list'))),
+    supabase
+      .from('security_events')
+      .select('*')
+      .eq('user_id', ctx.user.id)
+      .order('created_at', {ascending: false})
+      .limit(50)
+      .then((res) => toCamelList(unwrap<SecurityEventDbRow[]>(res, 'securityEvents.list'))),
   ])
 
   const sessionRows: SessionRow[] = sessions.map((s) => ({
     id: s.id,
     device: s.device,
     ip: s.ip,
-    createdAt: s.createdAt.toISOString(),
-    lastSeenAt: s.lastSeenAt.toISOString(),
-    expiresAt: s.expiresAt.toISOString(),
+    createdAt: s.createdAt,
+    lastSeenAt: s.lastSeenAt,
+    expiresAt: s.expiresAt,
     current: s.id === ctx.session.id,
   }))
 
@@ -36,7 +47,7 @@ export default async function SecurityPage() {
     type: e.type,
     ip: e.ip,
     userAgent: e.userAgent,
-    createdAt: e.createdAt.toISOString(),
+    createdAt: e.createdAt,
   }))
 
   return (

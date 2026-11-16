@@ -1,10 +1,11 @@
 import {NextResponse, type NextRequest} from 'next/server'
 import {z} from 'zod'
-import {db} from '@/lib/db'
+import {supabase, unwrap, unwrapNullable, nowIso, newId} from '@/lib/supabase'
 import {requireApiUser, isResponse} from '@/lib/auth/context'
 import {parseBody, fail} from '@/lib/api'
 import {audit} from '@/lib/auth/audit'
 import {vapidPublicKey} from '@/lib/notifications/push'
+import type {PushSubscriptionRow} from '@/lib/db-types'
 
 /**
  * Web Push subscription management.
@@ -48,16 +49,44 @@ export async function POST(req: NextRequest) {
   const ua = req.headers.get('user-agent')
   const platform = sub.platform === 'desktop' && platformFromUserAgent(ua) === 'mobile' ? 'mobile' : sub.platform
 
-  const existing = await db.pushSubscription.findUnique({where: {endpoint: sub.endpoint}})
+  const existing = unwrapNullable<PushSubscriptionRow>(
+    await supabase.from('push_subscriptions').select('id').eq('endpoint', sub.endpoint).maybeSingle(),
+    'pushSubscriptions.byEndpoint',
+  )
   if (existing) {
-    await db.pushSubscription.update({
-      where: {endpoint: sub.endpoint},
-      data: {userId, p256dh: sub.keys.p256dh, auth: sub.keys.auth, platform, userAgent: ua, deviceLabel: sub.deviceLabel ?? null, lastSeenAt: new Date(), revokedAt: null},
-    })
+    unwrap(
+      await supabase
+        .from('push_subscriptions')
+        .update({
+          user_id: userId,
+          p256dh: sub.keys.p256dh,
+          auth: sub.keys.auth,
+          platform,
+          user_agent: ua,
+          device_label: sub.deviceLabel ?? null,
+          last_seen_at: nowIso(),
+          revoked_at: null,
+        })
+        .eq('endpoint', sub.endpoint),
+      'pushSubscriptions.refresh',
+    )
   } else {
-    await db.pushSubscription.create({
-      data: {userId, endpoint: sub.endpoint, p256dh: sub.keys.p256dh, auth: sub.keys.auth, platform, userAgent: ua, deviceLabel: sub.deviceLabel ?? null},
-    })
+    unwrap(
+      await supabase
+        .from('push_subscriptions')
+        .insert({
+          id: newId(),
+          user_id: userId,
+          endpoint: sub.endpoint,
+          p256dh: sub.keys.p256dh,
+          auth: sub.keys.auth,
+          platform,
+          user_agent: ua,
+          device_label: sub.deviceLabel ?? null,
+          created_at: nowIso(),
+        }),
+      'pushSubscriptions.create',
+    )
   }
 
   await audit({actorId: userId, action: 'notification.push_subscribed', entity: 'push_subscription', detail: {platform, endpoint: sub.endpoint.slice(0, 64)}})
@@ -73,9 +102,15 @@ export async function DELETE(req: NextRequest) {
   const endpoint = url.searchParams.get('endpoint')
   if (!endpoint) return fail('endpoint required.')
 
-  const sub = await db.pushSubscription.findUnique({where: {endpoint}})
-  if (sub && sub.userId === userId) {
-    await db.pushSubscription.delete({where: {endpoint}})
+  const sub = unwrapNullable<Pick<PushSubscriptionRow, 'user_id'>>(
+    await supabase.from('push_subscriptions').select('user_id').eq('endpoint', endpoint).maybeSingle(),
+    'pushSubscriptions.byEndpoint',
+  )
+  if (sub && sub.user_id === userId) {
+    unwrap(
+      await supabase.from('push_subscriptions').delete().eq('endpoint', endpoint),
+      'pushSubscriptions.delete',
+    )
     await audit({actorId: userId, action: 'notification.push_unsubscribed', entity: 'push_subscription', detail: {endpoint: endpoint.slice(0, 64)}})
   }
   return NextResponse.json({ok: true})

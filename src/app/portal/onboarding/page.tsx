@@ -1,5 +1,6 @@
 import type {Metadata} from 'next'
-import {db} from '@/lib/db'
+import {supabase, unwrapNullable, toCamel} from '@/lib/supabase'
+import type {OrganisationRow} from '@/lib/db-types'
 import {requirePortalUser} from '@/lib/auth/context'
 import OnboardingWizard from '@/components/portal/OnboardingWizard'
 
@@ -11,7 +12,13 @@ export const metadata: Metadata = {
 export default async function OnboardingPage() {
   const ctx = await requirePortalUser()
   const profile = ctx.profile
-  const org = profile?.organisationId ? await db.organisation.findUnique({where: {id: profile.organisationId}}) : null
+  const orgRow = profile?.organisationId
+    ? unwrapNullable<OrganisationRow>(
+        await supabase.from('organisations').select('*').eq('id', profile.organisationId).maybeSingle(),
+        'organisation.get',
+      )
+    : null
+  const org = orgRow ? toCamel(orgRow) : null
 
   return (
     <div>

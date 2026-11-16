@@ -1,5 +1,14 @@
-import {db} from '@/lib/db'
+import {supabase, unwrap, unwrapNullable, unwrapCount, toCamel, toCamelList, newId, nowIso} from '@/lib/supabase'
 import {growth, inRange, sum, type Period} from './period'
+import type {
+  InvestorProfileRow,
+  MandateRow,
+  OrderRow,
+  PaymentRow,
+  RevenueEventRow,
+  SystemSettingRow,
+  UserRow,
+} from '@/lib/db-types'
 
 /**
  * Revenue engine — the financial instrument behind the Revenue Card.
@@ -27,8 +36,11 @@ interface FeeSchedule {
 }
 
 async function getFeeSchedule(): Promise<FeeSchedule> {
-  const setting = await db.systemSetting.findUnique({where: {key: 'payments.fee_schedule'}})
-  const v = (setting?.value ?? {}) as Record<string, unknown>
+  const settingRow = unwrapNullable<SystemSettingRow>(
+    await supabase.from('system_settings').select('*').eq('key', 'payments.fee_schedule').maybeSingle(),
+    'settings.feeSchedule',
+  )
+  const v = (settingRow?.value ?? {}) as Record<string, unknown>
   return {
     card: typeof v.card === 'number' ? v.card : 0,
     mpesa: typeof v.mpesa === 'number' ? v.mpesa : 0,
@@ -47,47 +59,72 @@ export async function feeScheduleConfigured(): Promise<boolean> {
  * so the ledger always reconciles with orders + verified payments + refunds.
  */
 export async function recogniseRevenue(orderId: string, actorId: string | null): Promise<void> {
-  const order = await db.order.findUnique({where: {id: orderId}, include: {payments: true}})
-  if (!order || order.status !== 'delivered') return
-  const verified = order.payments.filter((p) => p.status === 'verified')
+  const orderRow = unwrapNullable<OrderRow>(
+    await supabase.from('orders').select('*').eq('id', orderId).maybeSingle(),
+    'orders.get',
+  )
+  if (!orderRow || orderRow.status !== 'delivered') return
+  const paymentRows = unwrap<PaymentRow[]>(
+    await supabase.from('payments').select('*').eq('order_id', orderId),
+    'payments.list',
+  )
+  const verified = paymentRows.filter((p) => p.status === 'verified')
   if (verified.length === 0) return
 
   const schedule = await getFeeSchedule()
-  const grossUsd = order.amountUsd
-  const grossKes = order.amountKes
+  const grossUsd = orderRow.amount_usd
+  const grossKes = orderRow.amount_kes
   const processingUsd = verified.reduce((acc, p) => {
-    const pct = (schedule as Record<string, number>)[p.method] ?? 0
-    return acc + (p.amountUsd * pct) / 100
+    const pct = (schedule as unknown as Record<string, number>)[p.method] ?? 0
+    return acc + (p.amount_usd * pct) / 100
   }, 0)
 
-  const existing = await db.revenueEvent.findUnique({where: {orderId}})
-  const refundUsd = existing?.refundUsd ?? 0
+  const existingRow = unwrapNullable<RevenueEventRow>(
+    await supabase.from('revenue_events').select('*').eq('order_id', orderId).maybeSingle(),
+    'revenue.byOrder',
+  )
+  const refundUsd = existingRow?.refund_usd ?? 0
   const netUsd = Math.max(0, grossUsd - processingUsd - refundUsd)
 
-  const data = {
-    grossKes,
-    grossUsd,
-    processingUsd: round2(processingUsd),
-    refundUsd,
-    netUsd: round2(netUsd),
-    recognisedById: actorId,
+  const payload = {
+    gross_kes: grossKes,
+    gross_usd: grossUsd,
+    processing_usd: round2(processingUsd),
+    refund_usd: refundUsd,
+    net_usd: round2(netUsd),
+    recognised_by_id: actorId,
   }
-  if (existing) {
-    await db.revenueEvent.update({where: {orderId}, data})
+  if (existingRow) {
+    unwrap<null>(await supabase.from('revenue_events').update(payload).eq('order_id', orderId), 'revenue.update')
   } else {
-    await db.revenueEvent.create({data: {orderId, ...data}})
+    // NOTE: sequential (no multi-table tx over PostgREST) — read-then-write upsert on order_id
+    unwrap<null>(
+      await supabase
+        .from('revenue_events')
+        .insert({id: newId(), order_id: orderId, recognised_at: nowIso(), ...payload}),
+      'revenue.create',
+    )
   }
 }
 
 /** Apply an approved refund to the ledger (never deletes history). */
 export async function applyRefundToLedger(orderId: string, amountUsd: number): Promise<void> {
-  const event = await db.revenueEvent.findUnique({where: {orderId}})
-  if (!event) return
-  const refundUsd = round2(event.refundUsd + amountUsd)
-  await db.revenueEvent.update({
-    where: {orderId},
-    data: {refundUsd, netUsd: round2(Math.max(0, event.grossUsd - event.processingUsd - refundUsd))},
-  })
+  const eventRow = unwrapNullable<RevenueEventRow>(
+    await supabase.from('revenue_events').select('*').eq('order_id', orderId).maybeSingle(),
+    'revenue.byOrder',
+  )
+  if (!eventRow) return
+  const refundUsd = round2(eventRow.refund_usd + amountUsd)
+  unwrap<null>(
+    await supabase
+      .from('revenue_events')
+      .update({
+        refund_usd: refundUsd,
+        net_usd: round2(Math.max(0, eventRow.gross_usd - eventRow.processing_usd - refundUsd)),
+      })
+      .eq('order_id', orderId),
+    'revenue.refund',
+  )
 }
 
 function round2(x: number): number {
@@ -118,25 +155,58 @@ export interface RevenueCardMetrics {
 }
 
 async function recognisedOrders(from: Date, to: Date) {
-  const events = await db.revenueEvent.findMany({
-    where: {recognisedAt: {gte: from, lt: to}},
-    include: {order: {include: {payments: true}}},
+  const eventRows = unwrap<RevenueEventRow[]>(
+    await supabase
+      .from('revenue_events')
+      .select('*')
+      .gte('recognised_at', from.toISOString())
+      .lt('recognised_at', to.toISOString()),
+    'revenue.list',
+  )
+  if (eventRows.length === 0) return []
+  const orderIds = [...new Set(eventRows.map((e) => e.order_id))]
+  // relation include (order + payments) → separate queries + JS join
+  const orderRows = unwrap<OrderRow[]>(
+    await supabase.from('orders').select('*').in('id', orderIds),
+    'orders.list',
+  )
+  const paymentRows = unwrap<PaymentRow[]>(
+    await supabase.from('payments').select('*').in('order_id', orderIds),
+    'payments.list',
+  )
+  const orderBy = new Map(orderRows.map((o) => [o.id, o]))
+  const paymentsBy = new Map<string, PaymentRow[]>()
+  for (const p of paymentRows) {
+    const arr = paymentsBy.get(p.order_id) ?? []
+    arr.push(p)
+    paymentsBy.set(p.order_id, arr)
+  }
+  return eventRows.map((e) => {
+    const orderRow = orderBy.get(e.order_id)
+    return {
+      ...toCamel(e),
+      order: orderRow ? {...toCamel(orderRow), payments: toCamelList(paymentsBy.get(orderRow.id) ?? [])} : null,
+    }
   })
-  return events
 }
 
 export async function revenueCardMetrics(period: Period): Promise<RevenueCardMetrics> {
-  const [events, prevEvents, payments, openOrders] = await Promise.all([
+  const [events, prevEvents, paymentRows, openOrderRows] = await Promise.all([
     recognisedOrders(period.from, period.to),
     recognisedOrders(period.prevFrom, period.prevTo),
-    db.payment.findMany({
-      where: {status: 'verified', verifiedAt: {gte: period.from, lt: period.to}},
-      select: {amountUsd: true},
-    }),
-    db.order.findMany({
-      where: {status: {in: OPEN_ORDER_STATUSES}},
-      select: {amountUsd: true},
-    }),
+    unwrap<PaymentRow[]>(
+      await supabase
+        .from('payments')
+        .select('*')
+        .eq('status', 'verified')
+        .gte('verified_at', period.from.toISOString())
+        .lt('verified_at', period.to.toISOString()),
+      'payments.list',
+    ),
+    unwrap<OrderRow[]>(
+      await supabase.from('orders').select('*').in('status', OPEN_ORDER_STATUSES),
+      'orders.list',
+    ),
   ])
 
   const grossUsd = round2(sum(events.map((e) => e.grossUsd)))
@@ -145,8 +215,8 @@ export async function revenueCardMetrics(period: Period): Promise<RevenueCardMet
   const refundUsd = round2(sum(events.map((e) => e.refundUsd)))
   const netUsd = round2(sum(events.map((e) => e.netUsd)))
   const prevGross = round2(sum(prevEvents.map((e) => e.grossUsd)))
-  const cashCollectedUsd = round2(sum(payments.map((p) => p.amountUsd)))
-  const openOrderValueUsd = round2(sum(openOrders.map((o) => o.amountUsd)))
+  const cashCollectedUsd = round2(sum(paymentRows.map((p) => p.amount_usd)))
+  const openOrderValueUsd = round2(sum(openOrderRows.map((o) => o.amount_usd)))
 
   // Daily (or weekly) series for the sparkline / trend chart.
   const dayMs = 86400000
@@ -156,7 +226,10 @@ export async function revenueCardMetrics(period: Period): Promise<RevenueCardMet
   for (let t = period.from.getTime(); t < period.to.getTime(); t += step * dayMs) {
     const bFrom = new Date(t)
     const bTo = new Date(Math.min(t + step * dayMs, period.to.getTime()))
-    const inBucket = events.filter((e) => e.recognisedAt >= bFrom && e.recognisedAt < bTo)
+    const inBucket = events.filter((e) => {
+      const at = new Date(e.recognisedAt)
+      return at >= bFrom && at < bTo
+    })
     series.push({
       label: bFrom.toLocaleDateString('en-GB', {day: 'numeric', month: 'short'}),
       grossUsd: round2(sum(inBucket.map((e) => e.grossUsd))),
@@ -184,7 +257,7 @@ export async function revenueCardMetrics(period: Period): Promise<RevenueCardMet
     refundUsd,
     cashCollectedUsd,
     openOrderValueUsd,
-    openOrderCount: openOrders.length,
+    openOrderCount: openOrderRows.length,
     aovUsd: events.length > 0 ? round2(grossUsd / events.length) : null,
     ordersCompleted: events.length,
     revenueGrowthPct: growth(grossUsd, prevGross),
@@ -215,41 +288,55 @@ interface EnrichedEvent {
 }
 
 async function enrichedEvents(period: Period): Promise<EnrichedEvent[]> {
-  const events = await db.revenueEvent.findMany({
-    where: {recognisedAt: {gte: period.from, lt: period.to}},
-    include: {
-      order: {
-        select: {briefType: true, briefSource: true, userId: true, advisorId: true},
-      },
-    },
-  })
-  if (events.length === 0) return []
+  const eventRows = unwrap<RevenueEventRow[]>(
+    await supabase
+      .from('revenue_events')
+      .select('*')
+      .gte('recognised_at', period.from.toISOString())
+      .lt('recognised_at', period.to.toISOString()),
+    'revenue.list',
+  )
+  if (eventRows.length === 0) return []
+
+  // relation include (order) → separate query + JS join
+  const orderRows = unwrap<OrderRow[]>(
+    await supabase.from('orders').select('*').in('id', [...new Set(eventRows.map((e) => e.order_id))]),
+    'orders.list',
+  )
+  const orderBy = new Map(orderRows.map((o) => [o.id, o]))
 
   // Resolve investor profile facts + advisor attribution for each order.
-  const userIds = [...new Set(events.map((e) => e.order.userId))]
-  const profiles = await db.investorProfile.findMany({
-    where: {userId: {in: userIds}},
-    select: {userId: true, classification: true, countryResidence: true, advisorId: true},
-  })
-  const byUser = new Map(profiles.map((p) => [p.userId, p]))
+  const userIds = [...new Set(orderRows.map((o) => o.user_id))]
+  const profileRows = userIds.length
+    ? unwrap<InvestorProfileRow[]>(
+        await supabase.from('investor_profiles').select('*').in('user_id', userIds),
+        'profiles.list',
+      )
+    : []
+  const byUser = new Map(profileRows.map((p) => [p.user_id, p]))
 
   const advisorIds = [
-    ...new Set(events.map((e) => e.order.advisorId ?? byUser.get(e.order.userId)?.advisorId ?? null).filter((x): x is string => !!x)),
+    ...new Set(
+      orderRows
+        .map((o) => o.advisor_id ?? byUser.get(o.user_id)?.advisor_id ?? null)
+        .filter((x): x is string => !!x),
+    ),
   ]
-  const advisors = advisorIds.length
-    ? await db.user.findMany({where: {id: {in: advisorIds}}, select: {id: true, fullName: true, email: true}})
+  const advisorRows = advisorIds.length
+    ? unwrap<UserRow[]>(await supabase.from('users').select('*').in('id', advisorIds), 'users.list')
     : []
-  const advisorNames = new Map(advisors.map((a) => [a.id, a.fullName || a.email]))
+  const advisorNames = new Map(advisorRows.map((a) => [a.id, a.full_name || a.email]))
 
-  return events.map((e) => {
-    const profile = byUser.get(e.order.userId)
-    const advisorId = e.order.advisorId ?? profile?.advisorId ?? null
+  return eventRows.map((e) => {
+    const orderRow = orderBy.get(e.order_id)
+    const profile = orderRow ? byUser.get(orderRow.user_id) : undefined
+    const advisorId = orderRow ? orderRow.advisor_id ?? profile?.advisor_id ?? null : null
     return {
-      grossUsd: e.grossUsd,
-      briefType: e.order.briefType,
-      briefSource: e.order.briefSource,
+      grossUsd: e.gross_usd,
+      briefType: orderRow?.brief_type ?? '',
+      briefSource: orderRow?.brief_source ?? '',
       investorType: profile?.classification ?? 'individual',
-      country: profile?.countryResidence ?? null,
+      country: profile?.country_residence ?? null,
       advisorId: advisorId && advisorNames.has(advisorId) ? advisorId : advisorId,
     }
   })
@@ -282,16 +369,21 @@ export async function revenueBreakdowns(period: Period): Promise<{
 
   // Monthly/quarterly recurring view over a wider window (trailing 12 months).
   const yearAgo = new Date(period.to.getTime() - 365 * 86400000)
-  const monthlyEvents = await db.revenueEvent.findMany({
-    where: {recognisedAt: {gte: yearAgo, lt: period.to}},
-    select: {recognisedAt: true, grossUsd: true, netUsd: true},
-  })
+  const monthlyEventRows = unwrap<RevenueEventRow[]>(
+    await supabase
+      .from('revenue_events')
+      .select('*')
+      .gte('recognised_at', yearAgo.toISOString())
+      .lt('recognised_at', period.to.toISOString()),
+    'revenue.monthly',
+  )
   const monthMap = new Map<string, {grossUsd: number; netUsd: number}>()
-  for (const e of monthlyEvents) {
-    const k = `${e.recognisedAt.getUTCFullYear()}-${String(e.recognisedAt.getUTCMonth() + 1).padStart(2, '0')}`
+  for (const e of monthlyEventRows) {
+    const d = new Date(e.recognised_at)
+    const k = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`
     const cur = monthMap.get(k) ?? {grossUsd: 0, netUsd: 0}
-    cur.grossUsd = round2(cur.grossUsd + e.grossUsd)
-    cur.netUsd = round2(cur.netUsd + e.netUsd)
+    cur.grossUsd = round2(cur.grossUsd + e.gross_usd)
+    cur.netUsd = round2(cur.netUsd + e.net_usd)
     monthMap.set(k, cur)
   }
   const monthly = [...monthMap.entries()]
@@ -304,10 +396,10 @@ export async function revenueBreakdowns(period: Period): Promise<{
   const byAdvisorRaw = group((e) => e.advisorId ?? 'unattributed')
   // Resolve advisor names.
   const advisorIds = byAdvisorRaw.map((r) => r.label).filter((l) => l !== 'unattributed')
-  const advisors = advisorIds.length
-    ? await db.user.findMany({where: {id: {in: advisorIds}}, select: {id: true, fullName: true, email: true}})
+  const advisorRows = advisorIds.length
+    ? unwrap<UserRow[]>(await supabase.from('users').select('*').in('id', advisorIds), 'users.list')
     : []
-  const nameOf = new Map(advisors.map((a) => [a.id, a.fullName || a.email]))
+  const nameOf = new Map(advisorRows.map((a) => [a.id, a.full_name || a.email]))
   const byAdvisor = byAdvisorRaw.map((r) => ({
     ...r,
     label: r.label === 'unattributed' ? 'Unattributed' : nameOf.get(r.label) ?? 'Unattributed',
@@ -329,13 +421,24 @@ export async function revenueBreakdowns(period: Period): Promise<{
 // ---------------------------------------------------------------------------
 
 export async function cohortRevenue(): Promise<{cohort: string; investors: number; revenueUsd: number; firstOrderToRevenueDays: number | null}[]> {
-  const users = await db.user.findMany({
-    where: {role: 'investor'},
-    select: {id: true, createdAt: true},
-  })
-  const events = await db.revenueEvent.findMany({
-    select: {grossUsd: true, recognisedAt: true, order: {select: {userId: true, createdAt: true}}},
-  })
+  const userRows = unwrap<UserRow[]>(
+    await supabase.from('users').select('*').eq('role', 'investor'),
+    'users.list',
+  )
+  const eventRows = unwrap<RevenueEventRow[]>(
+    await supabase.from('revenue_events').select('*'),
+    'revenue.list',
+  )
+  // relation include (order) → separate query + JS join
+  const orderRows = eventRows.length
+    ? unwrap<OrderRow[]>(
+        await supabase.from('orders').select('*').in('id', [...new Set(eventRows.map((e) => e.order_id))]),
+        'orders.list',
+      )
+    : []
+  const orderByUser = new Map(orderRows.map((o) => [o.id, o.user_id]))
+
+  const users = userRows.map((u) => ({id: u.id, createdAt: new Date(u.created_at)}))
 
   const byUser = new Map<string, {cohort: string; revenue: number; recognised: Date[]}>()
   for (const u of users) {
@@ -345,11 +448,13 @@ export async function cohortRevenue(): Promise<{cohort: string; investors: numbe
       recognised: [],
     })
   }
-  for (const e of events) {
-    const entry = byUser.get(e.order.userId)
+  for (const e of eventRows) {
+    const orderUserId = orderByUser.get(e.order_id)
+    if (!orderUserId) continue
+    const entry = byUser.get(orderUserId)
     if (!entry) continue
-    entry.revenue = round2(entry.revenue + e.grossUsd)
-    entry.recognised.push(e.recognisedAt)
+    entry.revenue = round2(entry.revenue + e.gross_usd)
+    entry.recognised.push(new Date(e.recognised_at))
   }
 
   const cohortMap = new Map<string, {investors: number; revenueUsd: number; lagDays: number[]}>()
@@ -360,12 +465,14 @@ export async function cohortRevenue(): Promise<{cohort: string; investors: numbe
     cohortMap.set(v.cohort, cur)
   }
   // Time from registration to first recognised revenue, per cohort.
-  for (const e of events) {
-    const entry = byUser.get(e.order.userId)
+  for (const e of eventRows) {
+    const orderUserId = orderByUser.get(e.order_id)
+    if (!orderUserId) continue
+    const entry = byUser.get(orderUserId)
     if (!entry || entry.recognised.length === 0) continue
     const first = entry.recognised.reduce((min, d) => (d < min ? d : min), entry.recognised[0])
     const cohort = cohortMap.get(entry.cohort)
-    const user = users.find((u) => u.id === e.order.userId)
+    const user = users.find((u) => u.id === orderUserId)
     if (cohort && user) cohort.lagDays.push((first.getTime() - user.createdAt.getTime()) / 86400000)
   }
 
@@ -393,16 +500,18 @@ export async function pipelineRevenue(): Promise<{
   byStage: {stage: string; count: number; valueUsd: number}[]
   forecast: {conservativeUsd: number; baseUsd: number; upsideUsd: number; assumptions: string[]}
 }> {
-  const [mandates, openOrders] = await Promise.all([
-    db.mandate.findMany({
-      where: {status: 'active'},
-      select: {targetAllocationMin: true, targetAllocationMax: true, probability: true, stage: true, currency: true},
-    }),
-    db.order.findMany({
-      where: {status: {in: OPEN_ORDER_STATUSES}},
-      select: {amountUsd: true},
-    }),
+  const [mandateRows, openOrderRows] = await Promise.all([
+    unwrap<MandateRow[]>(
+      await supabase.from('mandates').select('*').eq('status', 'active'),
+      'mandates.list',
+    ),
+    unwrap<OrderRow[]>(
+      await supabase.from('orders').select('*').in('status', OPEN_ORDER_STATUSES),
+      'orders.list',
+    ),
   ])
+  const mandates = toCamelList(mandateRows)
+  const openOrders = toCamelList(openOrderRows)
 
   const midpoint = (m: {targetAllocationMin: number | null; targetAllocationMax: number | null; currency: string}) => {
     if (m.currency !== 'USD') return null // non-USD mandates excluded from the USD pipeline (labelled in UI)
@@ -466,15 +575,23 @@ export async function unitEconomics(period: Period): Promise<{
   avgFulfilmentCostUsd: number | null
   contributionMarginPct: number | null
 }> {
-  const [events, activeCount, verifiedCount, costSetting] = await Promise.all([
-    db.revenueEvent.findMany({where: {recognisedAt: {gte: period.from, lt: period.to}}, select: {grossUsd: true, processingUsd: true, refundUsd: true}}),
-    db.user.count({where: {role: 'investor', status: 'active'}}),
-    db.investorProfile.count({where: {verificationStatus: 'verified'}}),
-    db.systemSetting.findUnique({where: {key: 'finance.avg_fulfilment_cost_usd'}}),
+  const [eventRes, activeRes, verifiedRes, costRes] = await Promise.all([
+    supabase
+      .from('revenue_events')
+      .select('*')
+      .gte('recognised_at', period.from.toISOString())
+      .lt('recognised_at', period.to.toISOString()),
+    supabase.from('users').select('*', {count: 'exact', head: true}).eq('role', 'investor').eq('status', 'active'),
+    supabase.from('investor_profiles').select('*', {count: 'exact', head: true}).eq('verification_status', 'verified'),
+    supabase.from('system_settings').select('*').eq('key', 'finance.avg_fulfilment_cost_usd').maybeSingle(),
   ])
+  const events = unwrap<RevenueEventRow[]>(eventRes, 'revenue.list')
+  const activeCount = unwrapCount(activeRes, 'users.count')
+  const verifiedCount = unwrapCount(verifiedRes, 'profiles.count')
+  const costSettingRow = unwrapNullable<SystemSettingRow>(costRes, 'settings.cost')
 
-  const revenueUsd = round2(sum(events.map((e) => e.grossUsd)))
-  const v = (costSetting?.value ?? {}) as Record<string, unknown>
+  const revenueUsd = round2(sum(events.map((e) => e.gross_usd)))
+  const v = (costSettingRow?.value ?? {}) as Record<string, unknown>
   const avgCost = typeof v.amount === 'number' ? v.amount : null
   const orders = events.length
 
@@ -495,12 +612,27 @@ export async function unitEconomics(period: Period): Promise<{
 /** Cash collected (verified payments) vs recognised revenue, per period — the
  *  reconciliation view Finance uses. */
 export async function cashVersusRecognised(period: Period): Promise<{cashCollectedUsd: number; recognisedUsd: number; differenceUsd: number}> {
-  const [payments, events] = await Promise.all([
-    db.payment.findMany({where: {status: 'verified', verifiedAt: {gte: period.from, lt: period.to}}, select: {amountUsd: true}}),
-    db.revenueEvent.findMany({where: {recognisedAt: {gte: period.from, lt: period.to}}, select: {grossUsd: true}}),
+  const [paymentRows, eventRows] = await Promise.all([
+    unwrap<PaymentRow[]>(
+      await supabase
+        .from('payments')
+        .select('*')
+        .eq('status', 'verified')
+        .gte('verified_at', period.from.toISOString())
+        .lt('verified_at', period.to.toISOString()),
+      'payments.list',
+    ),
+    unwrap<RevenueEventRow[]>(
+      await supabase
+        .from('revenue_events')
+        .select('*')
+        .gte('recognised_at', period.from.toISOString())
+        .lt('recognised_at', period.to.toISOString()),
+      'revenue.list',
+    ),
   ])
-  const cash = round2(sum(payments.map((p) => p.amountUsd)))
-  const recognised = round2(sum(events.map((e) => e.grossUsd)))
+  const cash = round2(sum(paymentRows.map((p) => p.amount_usd)))
+  const recognised = round2(sum(eventRows.map((e) => e.gross_usd)))
   return {cashCollectedUsd: cash, recognisedUsd: recognised, differenceUsd: round2(cash - recognised)}
 }
 

@@ -1,5 +1,6 @@
 import type {Metadata} from 'next'
-import {db} from '@/lib/db'
+import {supabase, unwrap, toCamelList} from '@/lib/supabase'
+import type {CapitalCallRow, PortfolioPositionRow} from '@/lib/db-types'
 import {requirePortalUser} from '@/lib/auth/context'
 import PortfolioWorkspace, {type PositionRow} from '@/components/portal/portfolio/PortfolioWorkspace'
 
@@ -12,11 +13,29 @@ export const dynamic = 'force-dynamic'
 
 export default async function PortfolioPage() {
   const ctx = await requirePortalUser()
-  const positions = await db.portfolioPosition.findMany({
-    where: {userId: ctx.user.id},
-    orderBy: {createdAt: 'desc'},
-    include: {capitalCalls: {orderBy: {dueDate: 'asc'}}},
-  })
+  const positions = toCamelList(
+    unwrap<PortfolioPositionRow[]>(
+      await supabase.from('portfolio_positions').select('*').eq('user_id', ctx.user.id).order('created_at', {ascending: false}),
+      'positions.list',
+    ),
+  )
+
+  // relation include (capital calls) → separate query + JS join
+  const positionIds = positions.map((p) => p.id)
+  const capitalCallRows = positionIds.length
+    ? toCamelList(
+        unwrap<CapitalCallRow[]>(
+          await supabase.from('capital_calls').select('*').in('position_id', positionIds).order('due_date', {ascending: true}),
+          'capitalCalls.list',
+        ),
+      )
+    : []
+  const callsByPosition = new Map<string, typeof capitalCallRows>()
+  for (const c of capitalCallRows) {
+    const arr = callsByPosition.get(c.positionId) ?? []
+    arr.push(c)
+    callsByPosition.set(c.positionId, arr)
+  }
 
   const rows: PositionRow[] = positions.map((p) => ({
     id: p.id,
@@ -25,27 +44,27 @@ export default async function PortfolioPage() {
     assetClass: p.assetClass,
     geography: p.geography,
     status: p.status,
-    acquisitionDate: p.acquisitionDate?.toISOString() ?? null,
+    acquisitionDate: p.acquisitionDate ?? null,
     purchasePrice: p.purchasePrice,
     currency: p.currency,
     equityDeployed: p.equityDeployed,
     debtAmount: p.debtAmount,
     debtRate: p.debtRate,
-    debtMaturity: p.debtMaturity?.toISOString() ?? null,
+    debtMaturity: p.debtMaturity ?? null,
     grossIncomeAnnual: p.grossIncomeAnnual,
     operatingExpenses: p.operatingExpenses,
     noiActual: p.noiActual,
     occupancyPct: p.occupancyPct,
     valuation: p.valuation,
-    valuationDate: p.valuationDate?.toISOString() ?? null,
+    valuationDate: p.valuationDate ?? null,
     valuationBasis: p.valuationBasis,
     notes: p.notes,
-    capitalCalls: p.capitalCalls.map((c) => ({
+    capitalCalls: (callsByPosition.get(p.id) ?? []).map((c) => ({
       id: c.id,
       label: c.label,
       amount: c.amount,
       currency: c.currency,
-      dueDate: c.dueDate?.toISOString() ?? null,
+      dueDate: c.dueDate ?? null,
       status: c.status,
     })),
   }))

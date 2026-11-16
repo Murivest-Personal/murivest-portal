@@ -1,5 +1,5 @@
 import {NextResponse, type NextRequest} from 'next/server'
-import {db} from '@/lib/db'
+import {supabase, unwrap, unwrapNullable, newId, nowIso} from '@/lib/supabase'
 import {registerSchema} from '@/lib/validation'
 import {hashPassword} from '@/lib/auth/password'
 import {createSession} from '@/lib/auth/login'
@@ -8,33 +8,51 @@ import {audit, securityEvent} from '@/lib/auth/audit'
 import {sendMail} from '@/lib/mail'
 import {parseBody, ok, fail, clientMeta} from '@/lib/api'
 import {COMPANY} from '@/lib/constants'
+import type {UserRow} from '@/lib/db-types'
 
 export async function POST(req: NextRequest) {
   const parsed = await parseBody(req, registerSchema)
   if ('response' in parsed) return parsed.response
   const {fullName, email, password, intent} = parsed.data
 
-  const existing = await db.user.findUnique({where: {email}})
-  if (existing) return fail('An account with this email already exists. Sign in instead.', 409)
+  const existingRow = unwrapNullable<UserRow>(
+    await supabase.from('users').select('*').eq('email', email).maybeSingle(),
+    'user.byEmail',
+  )
+  if (existingRow) return fail('An account with this email already exists. Sign in instead.', 409)
 
   const passwordHash = await hashPassword(password)
-  const user = await db.user.create({
-    data: {
-      email,
-      passwordHash,
-      fullName,
-      role: 'investor',
-    },
-  })
-  await db.investorProfile.create({
-    data: {
-      userId: user.id,
-      ...(intent ? {classification: intent} : {}),
-    },
-  })
+  const userRow = unwrap<UserRow>(
+    await supabase
+      .from('users')
+      .insert({
+        id: newId(),
+        email,
+        password_hash: passwordHash,
+        full_name: fullName,
+        role: 'investor',
+        created_at: nowIso(),
+        updated_at: nowIso(),
+      })
+      .select('*')
+      .single(),
+    'user.create',
+  )
+  unwrap<null>(
+    await supabase
+      .from('investor_profiles')
+      .insert({
+        id: newId(),
+        user_id: userRow.id,
+        ...(intent ? {classification: intent} : {}),
+        created_at: nowIso(),
+        updated_at: nowIso(),
+      }),
+    'investorProfile.create',
+  )
 
   // Email verification
-  const token = await issueAuthToken(user.id, 'email_verify')
+  const token = await issueAuthToken(userRow.id, 'email_verify')
   const verifyUrl = `${(process.env.NEXT_PUBLIC_SITE_URL || COMPANY.siteUrl).replace(/\/$/, '')}/api/auth/verify-email?token=${encodeURIComponent(token)}`
   const mail = await sendMail({
     to: email,
@@ -43,7 +61,7 @@ export async function POST(req: NextRequest) {
   })
 
   // Immediate session (gated experience drives verification + onboarding)
-  const {token: sessionToken} = await createSession(user.id, req)
+  const {token: sessionToken} = await createSession(userRow.id, req)
   const res = NextResponse.json({ok: true, next: 'onboarding', devLink: mail.devLink})
   res.cookies.set('mvr_session', sessionToken, {
     httpOnly: true,
@@ -54,7 +72,7 @@ export async function POST(req: NextRequest) {
   })
 
   const meta = clientMeta(req)
-  await audit({actorId: user.id, action: 'auth.register', entity: 'user', entityId: user.id, ...meta})
-  await securityEvent({userId: user.id, type: 'login', ...meta})
+  await audit({actorId: userRow.id, action: 'auth.register', entity: 'user', entityId: userRow.id, ...meta})
+  await securityEvent({userId: userRow.id, type: 'login', ...meta})
   return res
 }

@@ -1,5 +1,6 @@
 import type {Metadata} from 'next'
-import {db} from '@/lib/db'
+import {supabase, unwrap, toCamelList} from '@/lib/supabase'
+import type {DocumentRequestRow} from '@/lib/db-types'
 import {requirePortalUser} from '@/lib/auth/context'
 import {getDocuments} from '@/lib/sanity/queries'
 import {isSanityConfigured} from '@/lib/sanity/client'
@@ -23,7 +24,13 @@ export default async function DocumentsPage({
 
   const [documents, requests] = await Promise.all([
     getDocuments(ctx.effectiveTier),
-    db.documentRequest.findMany({where: {userId: ctx.user.id}, orderBy: {createdAt: 'desc'}, take: 20}),
+    supabase
+      .from('document_requests')
+      .select('*')
+      .eq('user_id', ctx.user.id)
+      .order('created_at', {ascending: false})
+      .limit(20)
+      .then((res) => toCamelList(unwrap<DocumentRequestRow[]>(res, 'documentRequests.list'))),
   ])
 
   return (
@@ -54,7 +61,7 @@ export default async function DocumentsPage({
           detail: r.detail,
           type: r.type,
           status: r.status,
-          createdAt: r.createdAt.toISOString(),
+          createdAt: r.createdAt,
         }))}
         ndaAccepted={!!ctx.profile?.ndaAccepted}
         openNda={openNda}

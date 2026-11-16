@@ -1,6 +1,7 @@
 import {type NextRequest} from 'next/server'
-import {db} from '@/lib/db'
+import {supabase, unwrap, unwrapNullable, toCamelList, unwrapCount} from '@/lib/supabase'
 import {requireApiUser, isResponse} from '@/lib/auth/context'
+import type {NotificationRow} from '@/lib/db-types'
 
 export const dynamic = 'force-dynamic'
 
@@ -24,8 +25,17 @@ export async function GET(req: NextRequest) {
   if (isResponse(guard)) return guard.response
   const userId = guard.ctx.user.id
 
-  const latest = await db.notification.findFirst({where: {userId}, orderBy: {createdAt: 'desc'}, select: {id: true, createdAt: true}})
-  let cursor = latest?.createdAt ?? new Date(0)
+  const latest = unwrapNullable<Pick<NotificationRow, 'id' | 'created_at'>>(
+    await supabase
+      .from('notifications')
+      .select('id, created_at')
+      .eq('user_id', userId)
+      .order('created_at', {ascending: false})
+      .limit(1)
+      .maybeSingle(),
+    'stream.latest',
+  )
+  let cursor = latest ? new Date(latest.created_at) : new Date(0)
   let lastReadMarker: Date | null = null
   let closed = false
 
@@ -42,20 +52,27 @@ export async function GET(req: NextRequest) {
       }
 
       const unreadCount = async () =>
-        db.notification.count({where: {userId, readAt: null}})
+        unwrapCount(await supabase.from('notifications').select('*', {count: 'exact', head: true}).eq('user_id', userId).is('read_at', null))
 
       send('ready', {unread: await unreadCount(), cursor: cursor.toISOString()})
 
       const tick = async () => {
         if (closed) return
         try {
-          const rows = await db.notification.findMany({
-            where: {userId, createdAt: {gt: cursor}},
-            orderBy: {createdAt: 'asc'},
-            take: 10,
-          })
+          const rows = toCamelList(
+            unwrap<NotificationRow[]>(
+              await supabase
+                .from('notifications')
+                .select('*')
+                .eq('user_id', userId)
+                .gt('created_at', cursor.toISOString())
+                .order('created_at', {ascending: true})
+                .limit(10),
+              'stream.poll',
+            ),
+          )
           for (const row of rows) {
-            cursor = row.createdAt
+            cursor = new Date(row.createdAt)
             send('notification', {
               id: row.id,
               category: row.category,
@@ -68,9 +85,20 @@ export async function GET(req: NextRequest) {
             })
           }
           // Read-state sync across devices: emit the newest readAt marker.
-          const newestRead = await db.notification.findFirst({where: {userId, readAt: {not: null}}, orderBy: {readAt: 'desc'}, select: {readAt: true}})
-          if (newestRead?.readAt && (!lastReadMarker || newestRead.readAt > lastReadMarker)) {
-            lastReadMarker = newestRead.readAt
+          const newestRead = unwrapNullable<Pick<NotificationRow, 'read_at'>>(
+            await supabase
+              .from('notifications')
+              .select('read_at')
+              .eq('user_id', userId)
+              .not('read_at', 'is', null)
+              .order('read_at', {ascending: false})
+              .limit(1)
+              .maybeSingle(),
+            'stream.readMarker',
+          )
+          const newestReadAt = newestRead?.read_at ? new Date(newestRead.read_at) : null
+          if (newestReadAt && (!lastReadMarker || newestReadAt > lastReadMarker)) {
+            lastReadMarker = newestReadAt
             send('read', {unread: await unreadCount()})
           } else if (rows.length > 0) {
             send('unread', {unread: await unreadCount()})

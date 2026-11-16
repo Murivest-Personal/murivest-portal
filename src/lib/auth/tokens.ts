@@ -1,5 +1,6 @@
 import {randomBytes, createHash} from 'node:crypto'
-import {db} from '@/lib/db'
+import {supabase, unwrap, unwrapNullable} from '@/lib/supabase'
+import type {AuthTokenRow} from '@/lib/db-types'
 
 /**
  * Single-use, hashed, expiring tokens for email verification, magic links
@@ -17,23 +18,33 @@ const TTL_MINUTES: Record<TokenPurpose, number> = {
 
 export async function issueAuthToken(userId: string, purpose: TokenPurpose): Promise<string> {
   const token = randomBytes(32).toString('base64url')
-  await db.authToken.create({
-    data: {
-      userId,
-      tokenHash: createHash('sha256').update(token).digest('hex'),
+  unwrap(
+    await supabase.from('auth_tokens').insert({
+      user_id: userId,
+      token_hash: createHash('sha256').update(token).digest('hex'),
       purpose,
-      expiresAt: new Date(Date.now() + TTL_MINUTES[purpose] * 60 * 1000),
-    },
-  })
+      expires_at: new Date(Date.now() + TTL_MINUTES[purpose] * 60 * 1000).toISOString(),
+      created_at: new Date().toISOString(),
+    }),
+    'authToken.issue',
+  )
   return token
 }
 
 export async function consumeAuthToken(token: string, purpose: TokenPurpose): Promise<string | null> {
   const hash = createHash('sha256').update(token).digest('hex')
-  const record = await db.authToken.findUnique({where: {tokenHash: hash}})
-  if (!record || record.purpose !== purpose || record.usedAt || record.expiresAt < new Date()) return null
-  await db.authToken.update({where: {id: record.id}, data: {usedAt: new Date()}})
-  return record.userId
+  const record = unwrapNullable<AuthTokenRow>(
+    await supabase.from('auth_tokens').select('*').eq('token_hash', hash).maybeSingle(),
+    'authToken.consume',
+  )
+  if (!record || record.purpose !== purpose || record.used_at || new Date(record.expires_at) < new Date()) {
+    return null
+  }
+  unwrap(
+    await supabase.from('auth_tokens').update({used_at: new Date().toISOString()}).eq('id', record.id),
+    'authToken.markUsed',
+  )
+  return record.user_id
 }
 
 export function tokenUrl(base: string, token: string): string {

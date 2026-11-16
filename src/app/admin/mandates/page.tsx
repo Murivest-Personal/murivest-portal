@@ -1,6 +1,7 @@
 import {requireAdminPage} from '@/lib/admin/rbac'
 import {mandateList} from '@/lib/admin/queries'
-import {db} from '@/lib/db'
+import {supabase, unwrap, toCamelList} from '@/lib/supabase'
+import type {UserRow} from '@/lib/db-types'
 import MandatesWorkspace from '@/components/admin/MandatesWorkspace'
 import {PageHeader} from '@/components/admin/ui'
 
@@ -17,7 +18,15 @@ export default async function AdminMandatesPage({
 
   const [mandates, advisors] = await Promise.all([
     mandateList(actx, status ? {status} : {}),
-    db.user.findMany({where: {role: {in: ['advisor', 'admin']}, status: 'active'}, select: {id: true, fullName: true, email: true}, orderBy: {fullName: 'asc'}}),
+    supabase
+      .from('users')
+      .select('id, full_name, email')
+      .in('role', ['advisor', 'admin'])
+      .eq('status', 'active')
+      .order('full_name', {ascending: true})
+      .then((res) =>
+        toCamelList(unwrap<Pick<UserRow, 'id' | 'full_name' | 'email'>[]>(res, 'users.advisors')),
+      ),
   ])
 
   return (
@@ -30,13 +39,13 @@ export default async function AdminMandatesPage({
       <MandatesWorkspace
         initial={mandates.map((m) => ({
           ...m,
-          milestones: m.milestones.map((ms) => ({id: ms.id, title: ms.title, status: ms.status, dueDate: ms.dueDate?.toISOString() ?? null})),
-          createdAt: m.createdAt.toISOString(),
-          submittedAt: m.submittedAt?.toISOString() ?? null,
-          activatedAt: m.activatedAt?.toISOString() ?? null,
-          closedAt: m.closedAt?.toISOString() ?? null,
-          updatedAt: m.updatedAt.toISOString(),
-          nextActionDue: m.nextActionDue?.toISOString() ?? null,
+          milestones: m.milestones.map((ms) => ({id: ms.id, title: ms.title, status: ms.status, dueDate: ms.dueDate ?? null})),
+          createdAt: m.createdAt,
+          submittedAt: m.submittedAt ?? null,
+          activatedAt: m.activatedAt ?? null,
+          closedAt: m.closedAt ?? null,
+          updatedAt: m.updatedAt,
+          nextActionDue: m.nextActionDue ?? null,
         }))}
         initialStatus={status}
         canManage={actx.can('mandates.manage')}

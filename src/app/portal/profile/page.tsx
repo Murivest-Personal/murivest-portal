@@ -1,5 +1,6 @@
 import type {Metadata} from 'next'
-import {db} from '@/lib/db'
+import {supabase, unwrapNullable, toCamel} from '@/lib/supabase'
+import type {OrganisationRow} from '@/lib/db-types'
 import {requirePortalUser, classificationLabel, tierLabel} from '@/lib/auth/context'
 import ProfileEditor from '@/components/portal/ProfileEditor'
 import {StatusBadge, TierBadge} from '@/components/brand/primitives'
@@ -15,7 +16,16 @@ export default async function ProfilePage() {
   const ctx = await requirePortalUser()
   const profile = ctx.profile
   const org = profile?.organisationId
-    ? await db.organisation.findUnique({where: {id: profile.organisationId}}).catch(() => null)
+    ? await supabase
+        .from('organisations')
+        .select('*')
+        .eq('id', profile.organisationId)
+        .maybeSingle()
+        .then((res) => {
+          const row = unwrapNullable<OrganisationRow>(res, 'organisation.get')
+          return row ? toCamel(row) : null
+        })
+        .catch(() => null)
     : null
 
   return (

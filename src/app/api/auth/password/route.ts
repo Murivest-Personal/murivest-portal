@@ -1,5 +1,5 @@
 import {NextResponse, type NextRequest} from 'next/server'
-import {db} from '@/lib/db'
+import {supabase, unwrap, unwrapNullable} from '@/lib/supabase'
 import {forgotPasswordSchema, resetPasswordSchema, passwordChangeSchema} from '@/lib/validation'
 import {hashPassword, verifyPassword} from '@/lib/auth/password'
 import {issueAuthToken, consumeAuthToken} from '@/lib/auth/tokens'
@@ -9,6 +9,7 @@ import {audit, securityEvent} from '@/lib/auth/audit'
 import {parseBody, ok, fail, clientMeta} from '@/lib/api'
 import {requireApiUser, isResponse} from '@/lib/auth/context'
 import {COMPANY} from '@/lib/constants'
+import type {UserRow} from '@/lib/db-types'
 
 /**
  * POST /api/auth/password
@@ -24,9 +25,12 @@ export async function POST(req: NextRequest) {
   if (action === 'forgot') {
     const parsed = forgotPasswordSchema.safeParse(body)
     if (!parsed.success) return fail(parsed.error.issues[0]?.message || 'Enter a valid email.')
-    const user = await db.user.findUnique({where: {email: parsed.data.email}})
-    if (user && user.status === 'active') {
-      const token = await issueAuthToken(user.id, 'password_reset')
+    const userRow = unwrapNullable<UserRow>(
+      await supabase.from('users').select('*').eq('email', parsed.data.email).maybeSingle(),
+      'user.byEmail',
+    )
+    if (userRow && userRow.status === 'active') {
+      const token = await issueAuthToken(userRow.id, 'password_reset')
       const url = `${(process.env.NEXT_PUBLIC_SITE_URL || COMPANY.siteUrl).replace(/\/$/, '')}/reset-password?token=${encodeURIComponent(token)}`
       const mail = await sendMail({
         to: parsed.data.email,
@@ -46,10 +50,13 @@ export async function POST(req: NextRequest) {
     const userId = await consumeAuthToken(parsed.data.token, 'password_reset')
     if (!userId) return fail('This reset link is invalid or has expired. Request a new one.', 401)
     const passwordHash = await hashPassword(parsed.data.password)
-    await db.user.update({
-      where: {id: userId},
-      data: {passwordHash, failedLogins: 0, lockedUntil: null},
-    })
+    unwrap<null>(
+      await supabase
+        .from('users')
+        .update({password_hash: passwordHash, failed_logins: 0, locked_until: null})
+        .eq('id', userId),
+      'user.resetPassword',
+    )
     await revokeAllSessions(userId) // every device signs out after a reset
     await securityEvent({userId, type: 'password_changed', ...meta})
     await audit({actorId: userId, action: 'auth.password_reset', ...meta})
@@ -65,7 +72,10 @@ export async function POST(req: NextRequest) {
     const valid = await verifyPassword(parsed.data.currentPassword, ctx.user.passwordHash)
     if (!valid) return fail('Current password is incorrect.', 401)
     const passwordHash = await hashPassword(parsed.data.newPassword)
-    await db.user.update({where: {id: ctx.user.id}, data: {passwordHash}})
+    unwrap<null>(
+      await supabase.from('users').update({password_hash: passwordHash}).eq('id', ctx.user.id),
+      'user.changePassword',
+    )
     await securityEvent({userId: ctx.user.id, type: 'password_changed', ...meta})
     await audit({actorId: ctx.user.id, action: 'auth.password_changed', ...meta})
     return ok()

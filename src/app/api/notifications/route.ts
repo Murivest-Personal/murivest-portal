@@ -1,10 +1,11 @@
 import {NextResponse, type NextRequest} from 'next/server'
 import {z} from 'zod'
-import {db} from '@/lib/db'
+import {supabase, unwrap, toCamelList, unwrapCount, nowIso} from '@/lib/supabase'
 import {requireApiUser, isResponse} from '@/lib/auth/context'
 import {parseBody} from '@/lib/api'
 import {getEffectivePreferences} from '@/lib/notifications/preferences'
 import {vapidPublicKey} from '@/lib/notifications/push'
+import type {NotificationRow} from '@/lib/db-types'
 
 const schema = z.object({ids: z.array(z.string().max(64)).max(100).optional(), all: z.boolean().optional()})
 
@@ -17,15 +18,24 @@ export async function POST(req: NextRequest) {
   const {ids, all} = parsed.data
 
   if (all) {
-    await db.notification.updateMany({
-      where: {userId: guard.ctx.user.id, readAt: null},
-      data: {readAt: new Date()},
-    })
+    unwrap(
+      await supabase
+        .from('notifications')
+        .update({read_at: nowIso()})
+        .eq('user_id', guard.ctx.user.id)
+        .is('read_at', null),
+      'notifications.markAllRead',
+    )
   } else if (ids && ids.length > 0) {
-    await db.notification.updateMany({
-      where: {userId: guard.ctx.user.id, id: {in: ids}, readAt: null},
-      data: {readAt: new Date()},
-    })
+    unwrap(
+      await supabase
+        .from('notifications')
+        .update({read_at: nowIso()})
+        .eq('user_id', guard.ctx.user.id)
+        .in('id', ids)
+        .is('read_at', null),
+      'notifications.markRead',
+    )
   }
   return NextResponse.json({ok: true})
 }
@@ -48,23 +58,24 @@ export async function GET(req: NextRequest) {
   const tab = url.searchParams.get('tab') === 'unread' ? 'unread' : 'all'
   const before = url.searchParams.get('before')
 
-  const where = {
-    userId,
-    ...(tab === 'unread' ? {readAt: null} : {}),
-    ...(before ? {createdAt: {lt: new Date(before)}} : {}),
-  }
+  let feedQuery = supabase.from('notifications').select('*').eq('user_id', userId)
+  if (tab === 'unread') feedQuery = feedQuery.is('read_at', null)
+  if (before) feedQuery = feedQuery.lt('created_at', new Date(before).toISOString())
 
-  const [notifications, unreadRow, prefs, subs] = await Promise.all([
-    db.notification.findMany({where, orderBy: {createdAt: 'desc'}, take: 50}),
-    db.notification.aggregate({_count: {_all: true}, where: {userId, readAt: null}}),
+  const [feedRes, unreadRes, prefs, subsRes] = await Promise.all([
+    feedQuery.order('created_at', {ascending: false}).limit(50),
+    supabase.from('notifications').select('*', {count: 'exact', head: true}).eq('user_id', userId).is('read_at', null),
     getEffectivePreferences(userId),
-    db.pushSubscription.count({where: {userId, revokedAt: null}}),
+    supabase.from('push_subscriptions').select('*', {count: 'exact', head: true}).eq('user_id', userId).is('revoked_at', null),
   ])
+  const notifications = toCamelList(unwrap<NotificationRow[]>(feedRes, 'notifications.feed'))
+  const unread = unwrapCount(unreadRes, 'notifications.unreadCount')
+  const subs = unwrapCount(subsRes, 'pushSubscriptions.count')
 
   return NextResponse.json({
     ok: true,
     notifications,
-    unread: unreadRow._count._all,
+    unread,
     tab,
     channels: {
       pushSubscribed: subs > 0,

@@ -1,6 +1,6 @@
 import {NextResponse, type NextRequest} from 'next/server'
 import {z} from 'zod'
-import {db} from '@/lib/db'
+import {supabase, unwrap, nowIso, newId} from '@/lib/supabase'
 import {requireApiUser, isResponse} from '@/lib/auth/context'
 import {parseBody} from '@/lib/api'
 
@@ -13,6 +13,14 @@ export async function POST(req: NextRequest) {
   if (isResponse(guard)) return guard.response
   const parsed = await parseBody(req, viewSchema)
   if ('response' in parsed) return parsed.response
-  await db.opportunityView.create({data: {userId: guard.ctx.user.id, sanityId: parsed.data.sanityId}})
+  unwrap<null>(
+    await supabase.from('opportunity_views').insert({
+      id: newId(),
+      user_id: guard.ctx.user.id,
+      sanity_id: parsed.data.sanityId,
+      viewed_at: nowIso(),
+    }),
+    'opportunityViews.create',
+  )
   return NextResponse.json({ok: true})
 }

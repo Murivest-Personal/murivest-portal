@@ -1,0 +1,626 @@
+     1→import {db} from '@/lib/db'
+     2→import {growth, inRange, avg, sum, type Period} from './period'
+     3→
+     4→/**
+     5→ * Comprehensive analytics layer for capital-allocation operations.
+     6→ * Every number is computed from real interaction tables — no sample data.
+     7→ * Views/saves reference Sanity content ids; titles are resolved separately
+     8→ * (see opportunityAnalytics) when Sanity is configured.
+     9→ */
+    10→
+    11→// ---------------------------------------------------------------------------
+    12→// Executive dashboard (Command Centre + Analytics > Executive)
+    13→// ---------------------------------------------------------------------------
+    14→
+    15→export async function executiveSnapshot(period: Period): Promise<{
+    16→  activeInvestors: {total: number; uhnwi: number; institutional: number; individual: number}
+    17→  newRegistrations: {current: number; previous: number; growthPct: number | null}
+    18→  verificationConversionPct: number | null
+    19→  activeMandates: number
+    20→  submittedMandates: number
+    21→  opportunities: {live: number; offMarket: number; auction: number; underOffer: number; closed: number; total: number; source: 'sanity' | 'meta' | 'none'}
+    22→  openOrders: {count: number; valueUsd: number}
+    23→  avgFulfilmentHours: number | null
+    24→  pipeline: {weightedUsd: number; unweightedUsd: number}
+    25→  revenueUsd: number
+    26→  aovUsd: number | null
+    27→}> {
+    28→  const [
+    29→    investorProfiles,
+    30→    registrations,
+    31→    prevRegistrations,
+    32→    verifiedCount,
+    33→    activeMandates,
+    34→    submittedMandates,
+    35→    orders,
+    36→    revenueEvents,
+    37→  ] = await Promise.all([
+    38→    db.investorProfile.findMany({select: {classification: true, userId: true, verificationStatus: true}}),
+    39→    db.user.count({where: {role: 'investor', createdAt: {gte: period.from, lt: period.to}}}),
+    40→    db.user.count({where: {role: 'investor', createdAt: {gte: period.prevFrom, lt: period.prevTo}}}),
+    41→    db.investorProfile.count({where: {verificationStatus: 'verified'}}),
+    42→    db.mandate.count({where: {status: 'active'}}),
+    43→    db.mandate.count({where: {status: 'submitted'}}),
+    44→    db.order.findMany({where: {}, select: {status: true, amountUsd: true, createdAt: true, deliveredAt: true}}),
+    45→    db.revenueEvent.findMany({where: {recognisedAt: {gte: period.from, lt: period.to}}, select: {grossUsd: true}}),
+    46→  ])
+    47→
+    48→  // Live users (status active) among profiled investors.
+    49→  const activeUsers = await db.user.findMany({where: {role: 'investor', status: 'active'}, select: {id: true}})
+    50→  const activeIds = new Set(activeUsers.map((u) => u.id))
+    51→  const activeProfiles = investorProfiles.filter((p) => activeIds.has(p.userId))
+    52→  const byClass = (c: string) => activeProfiles.filter((p) => p.classification === c).length
+    53→
+    54→  // Mandate pipeline value (weighted) — reuse the revenue module's logic inline.
+    55→  const activeMandateRows = await db.mandate.findMany({
+    56→    where: {status: 'active', currency: 'USD'},
+    57→    select: {targetAllocationMin: true, targetAllocationMax: true, probability: true},
+    58→  })
+    59→  const midpoint = (lo: number | null, hi: number | null) => (lo == null && hi == null ? null : lo == null ? hi : hi == null ? lo : (lo + hi) / 2)
+    60→  let weightedUsd = 0
+    61→  let unweightedUsd = 0
+    62→  for (const m of activeMandateRows) {
+    63→    const mid = midpoint(m.targetAllocationMin, m.targetAllocationMax)
+    64→    if (mid == null) continue
+    65→    weightedUsd += mid * (Math.min(100, Math.max(0, m.probability)) / 100)
+    66→    unweightedUsd += mid
+    67→  }
+    68→
+    69→  // Opportunity inventory mix (from Sanity when configured, else DB signals).
+    70→  const {getAdminOpportunities} = await import('./queries')
+    71→  const sanityOps = await getAdminOpportunities()
+    72→  let oppMix = {live: 0, offMarket: 0, auction: 0, underOffer: 0, closed: 0, total: 0, source: 'none' as 'sanity' | 'meta' | 'none'}
+    73→  if (sanityOps.length > 0) {
+    74→    const closed = sanityOps.filter((o) => o.status === 'closed').length
+    75→    oppMix = {
+    76→      live: sanityOps.filter((o) => o.status !== 'closed').length,
+    77→      offMarket: sanityOps.filter((o) => o.status === 'off_market').length,
+    78→      auction: sanityOps.filter((o) => o.status === 'auction' || !!o.auctionUrl).length,
+    79→      underOffer: sanityOps.filter((o) => o.status === 'under_offer').length,
+    80→      closed,
+    81→      total: sanityOps.length,
+    82→      source: 'sanity',
+    83→    }
+    84→  } else {
+    85→    const metas = await db.contentMeta.findMany({where: {contentType: 'opportunity'}, select: {status: true, tags: true}})
+    86→    const tags = metas.flatMap((m) => (Array.isArray(m.tags) ? (m.tags as string[]) : []))
+    87→    oppMix = {
+    88→      live: metas.filter((m) => m.status === 'live').length,
+    89→      offMarket: tags.filter((t) => t === 'off_market').length,
+    90→      auction: tags.filter((t) => t === 'auction').length,
+    91→      underOffer: tags.filter((t) => t === 'under_offer').length,
+    92→      closed: metas.filter((m) => m.status === 'archived').length,
+    93→      total: metas.length,
+    94→      source: metas.length > 0 ? 'meta' : 'none',
+    95→    }
+    96→  }
+    97→
+    98→  const open = orders.filter((o) => ['pending','awaiting_payment','payment_confirmed','processing','internal_review','ready'].includes(o.status))
+    99→  const deliveredInPeriod = orders.filter((o) => o.deliveredAt && inRange(o.deliveredAt, period.from, period.to))
+   100→  const fulfilmentHours = deliveredInPeriod
+   101→    .filter((o) => o.deliveredAt)
+   102→    .map((o) => (o.deliveredAt!.getTime() - o.createdAt.getTime()) / 3600000)
+   103→  const revenueUsd = sum(revenueEvents.map((e) => e.grossUsd))
+   104→
+   105→  const totalInvestors = investorProfiles.length
+   106→  return {
+   107→    activeInvestors: {
+   108→      total: activeProfiles.length,
+   109→      uhnwi: byClass('uhnwi'),
+   110→      institutional: byClass('institutional_rep'),
+   111→      individual: byClass('individual'),
+   112→    },
+   113→    newRegistrations: {current: registrations, previous: prevRegistrations, growthPct: growth(registrations, prevRegistrations)},
+   114→    verificationConversionPct: totalInvestors > 0 ? Math.round((verifiedCount / totalInvestors) * 1000) / 10 : null,
+   115→    activeMandates,
+   116→    submittedMandates,
+   117→    opportunities: oppMix,
+   118→    openOrders: {count: open.length, valueUsd: sum(open.map((o) => o.amountUsd))},
+   119→    avgFulfilmentHours: avg(fulfilmentHours),
+   120→    pipeline: {weightedUsd: Math.round(weightedUsd), unweightedUsd: Math.round(unweightedUsd)},
+   121→    revenueUsd,
+   122→    aovUsd: revenueEvents.length > 0 ? Math.round((revenueUsd / revenueEvents.length) * 100) / 100 : null,
+   123→  }
+   124→}
+   125→
+   126→// ---------------------------------------------------------------------------
+   127→// Investor analytics
+   128→// ---------------------------------------------------------------------------
+   129→
+   130→export async function investorAnalytics(period: Period): Promise<{
+   131→  sources: {label: string; count: number}[]
+   132→  funnel: {stage: string; count: number}[]
+   133→  engagement: {userId: string; name: string; classification: string; logins: number; saved: number; scenarios: number; comparisons: number; lastLoginAt: Date | null}[]
+   134→  highValue: {userId: string; name: string; totalOrders: number; revenueUsd: number; classification: string}[]
+   135→  dormant: {userId: string; name: string; email: string; lastLoginAt: Date | null; daysSinceLogin: number | null; tier: string}[]
+   136→  engagementTotals: {logins: number; saved: number; scenarios: number}
+   137→}> {
+   138→  const [profiles, sessions, saves, scenarios, comparisons, orders, revenueEvents] = await Promise.all([
+   139→    db.investorProfile.findMany({
+   140→      select: {userId: true, classification: true, source: true, accessTier: true, verificationStatus: true, onboardingStep: true},
+   141→    }),
+   142→    db.session.findMany({where: {createdAt: {gte: period.from, lt: period.to}}, select: {userId: true}}),
+   143→    db.savedOpportunity.findMany({where: {createdAt: {gte: period.from, lt: period.to}}, select: {userId: true}}),
+   144→    db.scenario.findMany({where: {createdAt: {gte: period.from, lt: period.to}}, select: {userId: true}}),
+   145→    db.comparison.findMany({where: {createdAt: {gte: period.from, lt: period.to}}, select: {userId: true}}),
+   146→    db.user.findMany({where: {role: 'investor'}, select: {id: true, fullName: true, email: true, createdAt: true, emailVerifiedAt: true, lastLoginAt: true}}),
+   147→    db.revenueEvent.findMany({select: {grossUsd: true, order: {select: {userId: true}}}}),
+   148→  ])
+   149→
+   150→  const users = orders
+   151→  const byId = new Map(users.map((u) => [u.id, u]))
+   152→  const profileByUser = new Map(profiles.map((p) => [p.userId, p]))
+   153→
+   154→  // Acquisition sources
+   155→  const sourceMap = new Map<string, number>()
+   156→  for (const p of profiles) {
+   157→    const k = p.source?.trim() || 'Not stated'
+   158→    sourceMap.set(k, (sourceMap.get(k) ?? 0) + 1)
+   159→  }
+   160→
+   161→  // Conversion funnel: Visit → Request Access → Verified → First Order / First Mandate
+   162→  const orderUsers = new Set(revenueEvents.map((e) => e.order.userId))
+   163→  const mandateUsers = new Set((await db.mandate.findMany({select: {userId: true}})).map((m) => m.userId))
+   164→  const funnel = [
+   165→    {stage: 'Registered (visit → account)', count: users.length},
+   166→    {stage: 'Email verified', count: users.filter((u) => !!u.emailVerifiedAt).length},
+   167→    {stage: 'Profile submitted (access requested)', count: profiles.filter((p) => ['profile_submitted','kyc_pending','in_review','verified'].includes(p.verificationStatus)).length},
+   168→    {stage: 'Verified', count: profiles.filter((p) => p.verificationStatus === 'verified').length},
+   169→    {stage: 'First paid order', count: orderUsers.size},
+   170→    {stage: 'First mandate', count: mandateUsers.size},
+   171→  ]
+   172→
+   173→  // Engagement per investor (period activity)
+   174→  const countBy = (rows: {userId: string}[]) => {
+   175→    const m = new Map<string, number>()
+   176→    for (const r of rows) m.set(r.userId, (m.get(r.userId) ?? 0) + 1)
+   177→    return m
+   178→  }
+   179→  const loginCounts = countBy(sessions)
+   180→  const saveCounts = countBy(saves)
+   181→  const scenarioCounts = countBy(scenarios)
+   182→  const comparisonCounts = countBy(comparisons)
+   183→
+   184→  const engagement = profiles
+   185→    .map((p) => {
+   186→      const u = byId.get(p.userId)
+   187→      return {
+   188→        userId: p.userId,
+   189→        name: u?.fullName || u?.email || p.userId,
+   190→        classification: p.classification,
+   191→        logins: loginCounts.get(p.userId) ?? 0,
+   192→        saved: saveCounts.get(p.userId) ?? 0,
+   193→        scenarios: scenarioCounts.get(p.userId) ?? 0,
+   194→        comparisons: comparisonCounts.get(p.userId) ?? 0,
+   195→        lastLoginAt: u?.lastLoginAt ?? null,
+   196→      }
+   197→    })
+   198→    .sort((a, b) => b.logins + b.saved + b.scenarios - (a.logins + a.saved + a.scenarios))
+   199→    .slice(0, 100)
+   200→
+   201→  // High-value investors by recognised revenue
+   202→  const revenueByUser = new Map<string, {revenue: number; orders: number}>()
+   203→  for (const e of revenueEvents) {
+   204→    const cur = revenueByUser.get(e.order.userId) ?? {revenue: 0, orders: 0}
+   205→    cur.revenue += e.grossUsd
+   206→    cur.orders += 1
+   207→    revenueByUser.set(e.order.userId, cur)
+   208→  }
+   209→  const highValue = [...revenueByUser.entries()]
+   210→    .map(([userId, v]) => ({
+   211→      userId,
+   212→      name: byId.get(userId)?.fullName || byId.get(userId)?.email || userId,
+   213→      totalOrders: v.orders,
+   214→      revenueUsd: Math.round(v.revenue * 100) / 100,
+   215→      classification: profileByUser.get(userId)?.classification ?? 'individual',
+   216→    }))
+   217→    .sort((a, b) => b.revenueUsd - a.revenueUsd)
+   218→    .slice(0, 25)
+   219→
+   220→  // Dormancy — verified investors with no login in 60+ days
+   221→  const now = Date.now()
+   222→  const dormant = profiles
+   223→    .filter((p) => ['verified','in_review','kyc_pending'].includes(p.verificationStatus))
+   224→    .map((p) => {
+   225→      const u = byId.get(p.userId)
+   226→      const days = u?.lastLoginAt ? Math.floor((now - u.lastLoginAt.getTime()) / 86400000) : null
+   227→      return {userId: p.userId, name: u?.fullName || u?.email || p.userId, email: u?.email ?? '', lastLoginAt: u?.lastLoginAt ?? null, daysSinceLogin: days, tier: p.accessTier}
+   228→    })
+   229→    .filter((d) => d.daysSinceLogin == null || d.daysSinceLogin >= 60)
+   230→    .sort((a, b) => (b.daysSinceLogin ?? 9999) - (a.daysSinceLogin ?? 9999))
+   231→    .slice(0, 50)
+   232→
+   233→  return {
+   234→    sources: [...sourceMap.entries()].map(([label, count]) => ({label, count})).sort((a, b) => b.count - a.count),
+   235→    funnel,
+   236→    engagement,
+   237→    highValue,
+   238→    dormant,
+   239→    engagementTotals: {logins: sessions.length, saved: saves.length, scenarios: scenarios.length + comparisons.length},
+   240→  }
+   241→}
+   242→
+   243→// ---------------------------------------------------------------------------
+   244→// Opportunity analytics
+   245→// ---------------------------------------------------------------------------
+   246→
+   247→export async function opportunityAnalytics(period: Period): Promise<{
+   248→  perOpportunity: {sanityId: string; title: string | null; views: number; uniqueViewers: number; saves: number; orders: number; revenueUsd: number}[]
+   249→  topViewed: {sanityId: string; title: string | null; views: number}[]
+   250→  highestConversion: {sanityId: string; title: string | null; views: number; orders: number; conversionPct: number | null}[]
+   251→  studioUsage: {scenarios: number; comparisons: number; capitalGapRuns: number}
+   252→  demandByAssetClass: {label: string; count: number}[]
+   253→  demandByGeography: {label: string; count: number}[]
+   254→}> {
+   255→  const [views, saves, orders, revenueEvents, scenarios, comparisons, criteria] = await Promise.all([
+   256→    db.opportunityView.findMany({where: {viewedAt: {gte: period.from, lt: period.to}}, select: {sanityId: true, userId: true}}),
+   257→    db.savedOpportunity.findMany({where: {createdAt: {gte: period.from, lt: period.to}}, select: {sanityId: true}}),
+   258→    db.order.findMany({where: {sanityOpportunityId: {not: null}}, select: {sanityOpportunityId: true, amountUsd: true, status: true}}),
+   259→    db.revenueEvent.findMany({select: {grossUsd: true, order: {select: {sanityOpportunityId: true}}}}),
+   260→    db.scenario.count({where: {createdAt: {gte: period.from, lt: period.to}}}),
+   261→    db.comparison.count({where: {createdAt: {gte: period.from, lt: period.to}}}),
+   262→    db.investorCriteria.findMany({select: {assetClasses: true, geographies: true}}),
+   263→  ])
+   264→
+   265→  const {getAdminOpportunities} = await import('./queries')
+   266→  const sanityOps = await getAdminOpportunities()
+   267→  const titles = new Map(sanityOps.map((o) => [o._id, o.title]))
+   268→  const metaTitles = new Map(
+   269→    (await db.contentMeta.findMany({where: {contentType: 'opportunity'}, select: {sanityId: true, title: true}})).map((m) => [m.sanityId, m.title]),
+   270→  )
+   271→  const titleOf = (id: string) => titles.get(id) ?? metaTitles.get(id) ?? null
+   272→
+   273→  const viewsBy = new Map<string, {views: number; viewers: Set<string>}>()
+   274→  for (const v of views) {
+   275→    const cur = viewsBy.get(v.sanityId) ?? {views: 0, viewers: new Set<string>()}
+   276→    cur.views += 1
+   277→    cur.viewers.add(v.userId)
+   278→    viewsBy.set(v.sanityId, cur)
+   279→  }
+   280→  const savesBy = new Map<string, number>()
+   281→  for (const s of saves) savesBy.set(s.sanityId, (savesBy.get(s.sanityId) ?? 0) + 1)
+   282→  const ordersBy = new Map<string, number>()
+   283→  for (const o of orders) {
+   284→    const id = o.sanityOpportunityId!
+   285→    ordersBy.set(id, (ordersBy.get(id) ?? 0) + 1)
+   286→  }
+   287→  const revenueBy = new Map<string, number>()
+   288→  for (const e of revenueEvents) {
+   289→    const id = e.order.sanityOpportunityId
+   290→    if (!id) continue
+   291→    revenueBy.set(id, (revenueBy.get(id) ?? 0) + e.grossUsd)
+   292→  }
+   293→
+   294→  const allIds = new Set<string>([...viewsBy.keys(), ...savesBy.keys(), ...ordersBy.keys(), ...titles.keys()])
+   295→  const perOpportunity = [...allIds]
+   296→    .map((id) => ({
+   297→      sanityId: id,
+   298→      title: titleOf(id),
+   299→      views: viewsBy.get(id)?.views ?? 0,
+   300→      uniqueViewers: viewsBy.get(id)?.viewers.size ?? 0,
+   301→      saves: savesBy.get(id) ?? 0,
+   302→      orders: ordersBy.get(id) ?? 0,
+   303→      revenueUsd: Math.round((revenueBy.get(id) ?? 0) * 100) / 100,
+   304→    }))
+   305→    .sort((a, b) => b.views - a.views || b.orders - a.orders)
+   306→
+   307→  const topViewed = perOpportunity.slice(0, 10).map((o) => ({sanityId: o.sanityId, title: o.title, views: o.views}))
+   308→  const highestConversion = perOpportunity
+   309→    .filter((o) => o.views >= 1 && o.orders > 0)
+   310→    .map((o) => ({sanityId: o.sanityId, title: o.title, views: o.views, orders: o.orders, conversionPct: Math.round((o.orders / o.views) * 1000) / 10}))
+   311→    .sort((a, b) => (b.conversionPct ?? 0) - (a.conversionPct ?? 0))
+   312→    .slice(0, 10)
+   313→
+   314→  // Demand signals from stated investor criteria
+   315→  const assetMap = new Map<string, number>()
+   316→  for (const c of criteria) {
+   317→    for (const a of (c.assetClasses as string[] | null) ?? []) assetMap.set(a, (assetMap.get(a) ?? 0) + 1)
+   318→  }
+   319→  const geoMap = new Map<string, number>()
+   320→  for (const c of criteria) {
+   321→    for (const g of (c.geographies as {country?: string; city?: string}[] | null) ?? []) {
+   322→      const k = [g.country, g.city].filter(Boolean).join(' · ') || 'Not stated'
+   323→      geoMap.set(k, (geoMap.get(k) ?? 0) + 1)
+   324→    }
+   325→  }
+   326→
+   327→  return {
+   328→    perOpportunity,
+   329→    topViewed,
+   330→    highestConversion,
+   331→    studioUsage: {
+   332→      scenarios,
+   333→      comparisons,
+   334→      // Capital-gap analysis is run inside the Investment Studio match view;
+   335→      // scenario creations are the observable proxy (labelled as such in UI).
+   336→      capitalGapRuns: scenarios,
+   337→    },
+   338→    demandByAssetClass: [...assetMap.entries()].map(([label, count]) => ({label, count})).sort((a, b) => b.count - a.count),
+   339→    demandByGeography: [...geoMap.entries()].map(([label, count]) => ({label, count})).sort((a, b) => b.count - a.count).slice(0, 12),
+   340→  }
+   341→}
+   342→
+   343→// ---------------------------------------------------------------------------
+   344→// Orders & fulfilment analytics
+   345→// ---------------------------------------------------------------------------
+   346→
+   347→export async function orderAnalytics(period: Period): Promise<{
+   348→  series: {label: string; count: number; valueUsd: number}[]
+   349→  statusCounts: {status: string; count: number; valueUsd: number}[]
+   350→  avgFulfilmentDays: number | null
+   351→  viewToOrderConversionPct: number | null
+   352→  viewsInPeriod: number
+   353→  ordersFromViews: number
+   354→  repeatOrderRatePct: number | null
+   355→  briefTypePerformance: {briefType: string; count: number; valueUsd: number; revenueUsd: number}[]
+   356→  avgOrderValueUsd: number | null
+   357→}> {
+   358→  const [orders, revenueEvents, views] = await Promise.all([
+   359→    db.order.findMany({select: {createdAt: true, status: true, amountUsd: true, briefType: true, briefSource: true, userId: true, deliveredAt: true, sanityOpportunityId: true}}),
+   360→    db.revenueEvent.findMany({where: {recognisedAt: {gte: period.from, lt: period.to}}, select: {grossUsd: true, order: {select: {briefType: true}}}}),
+   361→    db.opportunityView.count({where: {viewedAt: {gte: period.from, lt: period.to}}}),
+   362→  ])
+   363→
+   364→  const inPeriod = orders.filter((o) => inRange(o.createdAt, period.from, period.to))
+   365→
+   366→  // Volume / value series
+   367→  const dayMs = 86400000
+   368→  const spanDays = Math.max(1, Math.round((period.to.getTime() - period.from.getTime()) / dayMs))
+   369→  const step = spanDays > 92 ? 7 : 1
+   370→  const series: {label: string; count: number; valueUsd: number}[] = []
+   371→  for (let t = period.from.getTime(); t < period.to.getTime(); t += step * dayMs) {
+   372→    const bFrom = new Date(t)
+   373→    const bTo = new Date(Math.min(t + step * dayMs, period.to.getTime()))
+   374→    const bucket = inPeriod.filter((o) => o.createdAt >= bFrom && o.createdAt < bTo)
+   375→    series.push({
+   376→      label: bFrom.toLocaleDateString('en-GB', {day: 'numeric', month: 'short'}),
+   377→      count: bucket.length,
+   378→      valueUsd: Math.round(sum(bucket.map((o) => o.amountUsd)) * 100) / 100,
+   379→    })
+   380→  }
+   381→
+   382→  // Status distribution (all orders, current state)
+   383→  const statusMap = new Map<string, {count: number; valueUsd: number}>()
+   384→  for (const o of orders) {
+   385→    const cur = statusMap.get(o.status) ?? {count: 0, valueUsd: 0}
+   386→    cur.count += 1
+   387→    cur.valueUsd += o.amountUsd
+   388→    statusMap.set(o.status, cur)
+   389→  }
+   390→
+   391→  // Fulfilment time for orders delivered in period
+   392→  const delivered = orders.filter((o) => o.deliveredAt && inRange(o.deliveredAt, period.from, period.to))
+   393→  const avgFulfilmentDays = avg(delivered.map((o) => (o.deliveredAt!.getTime() - o.createdAt.getTime()) / 86400000))
+   394→
+   395→  // Conversion from opportunity view → order (period)
+   396→  const ordersFromViews = inPeriod.filter((o) => !!o.sanityOpportunityId).length
+   397→  const viewToOrderConversionPct = views > 0 ? Math.round((ordersFromViews / views) * 1000) / 10 : null
+   398→
+   399→  // Repeat order rate
+   400→  const byUser = new Map<string, number>()
+   401→  for (const o of orders) byUser.set(o.userId, (byUser.get(o.userId) ?? 0) + 1)
+   402→  const investorsWithOrders = byUser.size
+   403→  const repeat = [...byUser.values()].filter((n) => n >= 2).length
+   404→  const repeatOrderRatePct = investorsWithOrders > 0 ? Math.round((repeat / investorsWithOrders) * 1000) / 10 : null
+   405→
+   406→  // Brief type performance
+   407→  const typeMap = new Map<string, {count: number; valueUsd: number; revenueUsd: number}>()
+   408→  for (const o of inPeriod) {
+   409→    const cur = typeMap.get(o.briefType) ?? {count: 0, valueUsd: 0, revenueUsd: 0}
+   410→    cur.count += 1
+   411→    cur.valueUsd += o.amountUsd
+   412→    typeMap.set(o.briefType, cur)
+   413→  }
+   414→  for (const e of revenueEvents) {
+   415→    const cur = typeMap.get(e.order.briefType)
+   416→    if (cur) cur.revenueUsd += e.grossUsd
+   417→  }
+   418→
+   419→  return {
+   420→    series,
+   421→    statusCounts: [...statusMap.entries()].map(([status, v]) => ({status, ...v})),
+   422→    avgFulfilmentDays,
+   423→    viewToOrderConversionPct,
+   424→    viewsInPeriod: views,
+   425→    ordersFromViews,
+   426→    repeatOrderRatePct,
+   427→    briefTypePerformance: [...typeMap.entries()].map(([briefType, v]) => ({briefType, ...v})).sort((a, b) => b.valueUsd - a.valueUsd),
+   428→    avgOrderValueUsd: inPeriod.length > 0 ? Math.round((sum(inPeriod.map((o) => o.amountUsd)) / inPeriod.length) * 100) / 100 : null,
+   429→  }
+   430→}
+   431→
+   432→// ---------------------------------------------------------------------------
+   433→// Mandate & pipeline analytics
+   434→// ---------------------------------------------------------------------------
+   435→
+   436→export async function mandateAnalytics(period: Period): Promise<{
+   437→  volumeByStatus: {status: string; count: number}[]
+   438→  sizeDistribution: {bucket: string; count: number}[]
+   439→  winRatePct: number | null
+   440→  avgDaysToActivate: number | null
+   441→  avgDaysToClose: number | null
+   442→  byAdvisor: {advisorId: string | null; name: string; active: number; weightedUsd: number}[]
+   443→  stageDistribution: {stage: string; count: number; weightedUsd: number}[]
+   444→}> {
+   445→  const mandates = await db.mandate.findMany({
+   446→    select: {status: true, stage: true, probability: true, targetAllocationMin: true, targetAllocationMax: true, currency: true, advisorId: true, createdAt: true, submittedAt: true, activatedAt: true, closedAt: true},
+   447→  })
+   448→
+   449→  const statusMap = new Map<string, number>()
+   450→  for (const m of mandates) statusMap.set(m.status, (statusMap.get(m.status) ?? 0) + 1)
+   451→
+   452→  const midpoint = (m: typeof mandates[number]) => {
+   453→    if (m.currency !== 'USD') return null
+   454→    const lo = m.targetAllocationMin
+   455→    const hi = m.targetAllocationMax
+   456→    if (lo == null && hi == null) return null
+   457→    if (lo == null) return hi
+   458→    if (hi == null) return lo
+   459→    return (lo + hi) / 2
+   460→  }
+   461→
+   462→  const buckets: [string, (v: number) => boolean][] = [
+   463→    ['< $1M', (v) => v < 1_000_000],
+   464→    ['$1M – $5M', (v) => v >= 1_000_000 && v < 5_000_000],
+   465→    ['$5M – $10M', (v) => v >= 5_000_000 && v < 10_000_000],
+   466→    ['$10M – $50M', (v) => v >= 10_000_000 && v < 50_000_000],
+   467→    ['$50M+', (v) => v >= 50_000_000],
+   468→  ]
+   469→  const sizeDistribution = buckets.map(([bucket, test]) => ({
+   470→    bucket,
+   471→    count: mandates.filter((m) => {
+   472→      const mid = midpoint(m)
+   473→      return mid != null && test(mid)
+   474→    }).length,
+   475→  }))
+   476→
+   477→  const closed = mandates.filter((m) => m.status === 'closed').length
+   478→  const rejected = mandates.filter((m) => m.status === 'rejected').length
+   479→  const winRatePct = closed + rejected > 0 ? Math.round((closed / (closed + rejected)) * 1000) / 10 : null
+   480→
+   481→  const activated = mandates.filter((m) => m.submittedAt && m.activatedAt)
+   482→  const avgDaysToActivate = avg(activated.map((m) => (m.activatedAt!.getTime() - m.submittedAt!.getTime()) / 86400000))
+   483→  const closedRows = mandates.filter((m) => m.activatedAt && m.closedAt)
+   484→  const avgDaysToClose = avg(closedRows.map((m) => (m.closedAt!.getTime() - m.activatedAt!.getTime()) / 86400000))
+   485→
+   486→  // Advisor attribution
+   487→  const advisorIds = [...new Set(mandates.map((m) => m.advisorId).filter((x): x is string => !!x))]
+   488→  const advisors = advisorIds.length ? await db.user.findMany({where: {id: {in: advisorIds}}, select: {id: true, fullName: true, email: true}}) : []
+   489→  const advisorNames = new Map(advisors.map((a) => [a.id, a.fullName || a.email]))
+   490→  const byAdvisorMap = new Map<string | null, {active: number; weighted: number}>()
+   491→  for (const m of mandates.filter((x) => x.status === 'active')) {
+   492→    const mid = midpoint(m)
+   493→    if (mid == null) continue
+   494→    const cur = byAdvisorMap.get(m.advisorId ?? null) ?? {active: 0, weighted: 0}
+   495→    cur.active += 1
+   496→    cur.weighted += mid * (Math.min(100, Math.max(0, m.probability)) / 100)
+   497→    byAdvisorMap.set(m.advisorId ?? null, cur)
+   498→  }
+   499→  const byAdvisor = [...byAdvisorMap.entries()]
+   500→    .map(([advisorId, v]) => ({advisorId, name: advisorId ? advisorNames.get(advisorId) ?? 'Advisor' : 'Unassigned', active: v.active, weightedUsd: Math.round(v.weighted)}))
+   501→    .sort((a, b) => b.weightedUsd - a.weightedUsd)
+   502→
+   503→  const stageMap = new Map<string, {count: number; weighted: number}>()
+   504→  for (const m of mandates.filter((x) => x.status === 'active')) {
+   505→    const mid = midpoint(m)
+   506→    if (mid == null) continue
+   507→    const stage = m.stage ?? 'sourcing'
+   508→    const cur = stageMap.get(stage) ?? {count: 0, weighted: 0}
+   509→    cur.count += 1
+   510→    cur.weighted += mid * (Math.min(100, Math.max(0, m.probability)) / 100)
+   511→    stageMap.set(stage, cur)
+   512→  }
+   513→
+   514→  return {
+   515→    volumeByStatus: [...statusMap.entries()].map(([status, count]) => ({status, count})),
+   516→    sizeDistribution,
+   517→    winRatePct,
+   518→    avgDaysToActivate,
+   519→    avgDaysToClose,
+   520→    byAdvisor,
+   521→    stageDistribution: [...stageMap.entries()].map(([stage, v]) => ({stage, count: v.count, weightedUsd: Math.round(v.weighted)})),
+   522→  }
+   523→}
+   524→
+   525→// ---------------------------------------------------------------------------
+   526→// Operational health
+   527→// ---------------------------------------------------------------------------
+   528→
+   529→export async function operationalHealth(period: Period): Promise<{
+   530→  avgFirstResponseHours: number | null
+   531→  openEnquiries: number
+   532→  docViews: number
+   533→  docDownloads: number
+   534→  topDocuments: {sanityDocumentId: string; title: string | null; views: number; downloads: number}[]
+   535→  sessionsPerDay: {label: string; count: number}[]
+   536→  activeSessions: number
+   537→  failedLogins: number
+   538→}> {
+   539→  const [enquiries, messages, accessLogs, sessions, activeSessions, failedLogins] = await Promise.all([
+   540→    db.enquiry.findMany({select: {id: true, createdAt: true, status: true, userId: true}}),
+   541→    db.message.findMany({select: {enquiryId: true, senderType: true, createdAt: true}}),
+   542→    db.documentAccessLog.findMany({where: {createdAt: {gte: period.from, lt: period.to}}, select: {sanityDocumentId: true, documentTitle: true, action: true}}),
+   543→    db.session.findMany({where: {createdAt: {gte: period.from, lt: period.to}}, select: {createdAt: true}}),
+   544→    db.session.count({where: {revokedAt: null, expiresAt: {gt: new Date()}}}),
+   545→    db.securityEvent.count({where: {type: 'login_failed', createdAt: {gte: period.from, lt: period.to}}}),
+   546→  ])
+   547→
+   548→  // First-response time: enquiry creation → first advisor/system reply
+   549→  const firstReplyByEnquiry = new Map<string, Date>()
+   550→  for (const m of messages) {
+   551→    if (m.senderType === 'investor' || !m.enquiryId) continue
+   552→    const cur = firstReplyByEnquiry.get(m.enquiryId)
+   553→    if (!cur || m.createdAt < cur) firstReplyByEnquiry.set(m.enquiryId, m.createdAt)
+   554→  }
+   555→  const responded = enquiries.filter((e) => firstReplyByEnquiry.has(e.id))
+   556→  const avgFirstResponseHours = avg(responded.map((e) => (firstReplyByEnquiry.get(e.id)!.getTime() - e.createdAt.getTime()) / 3600000))
+   557→
+   558→  const docMap = new Map<string, {title: string | null; views: number; downloads: number}>()
+   559→  for (const l of accessLogs) {
+   560→    const cur = docMap.get(l.sanityDocumentId) ?? {title: l.documentTitle ?? null, views: 0, downloads: 0}
+   561→    if (l.action === 'view') cur.views += 1
+   562→    if (l.action === 'download') cur.downloads += 1
+   563→    if (!cur.title && l.documentTitle) cur.title = l.documentTitle
+   564→    docMap.set(l.sanityDocumentId, cur)
+   565→  }
+   566→
+   567→  const dayMs = 86400000
+   568→  const sessionSeries: {label: string; count: number}[] = []
+   569→  for (let t = period.from.getTime(); t < period.to.getTime(); t += dayMs) {
+   570→    const bFrom = new Date(t)
+   571→    const bTo = new Date(t + dayMs)
+   572→    sessionSeries.push({
+   573→      label: bFrom.toLocaleDateString('en-GB', {day: 'numeric', month: 'short'}),
+   574→      count: sessions.filter((s) => s.createdAt >= bFrom && s.createdAt < bTo).length,
+   575→    })
+   576→  }
+   577→
+   578→  return {
+   579→    avgFirstResponseHours,
+   580→    openEnquiries: enquiries.filter((e) => e.status === 'open').length,
+   581→    docViews: accessLogs.filter((l) => l.action === 'view').length,
+   582→    docDownloads: accessLogs.filter((l) => l.action === 'download').length,
+   583→    topDocuments: [...docMap.entries()]
+   584→      .map(([sanityDocumentId, v]) => ({sanityDocumentId, title: v.title, views: v.views, downloads: v.downloads}))
+   585→      .sort((a, b) => b.views + b.downloads - (a.views + a.downloads))
+   586→      .slice(0, 10),
+   587→    sessionsPerDay: sessionSeries,
+   588→    activeSessions,
+   589→    failedLogins,
+   590→  }
+   591→}
+   592→
+   593→// ---------------------------------------------------------------------------
+   594→// Advisor performance (Executive dashboard)
+   595→// ---------------------------------------------------------------------------
+   596→
+   597→export async function advisorPerformance(period: Period): Promise<{advisorId: string; name: string; assignedInvestors: number; activeMandates: number; ordersSupported: number; revenueUsd: number}[]> {
+   598→  const [advisors, profiles, mandates, revenueEvents] = await Promise.all([
+   599→    db.user.findMany({where: {role: {in: ['advisor', 'admin']}}, select: {id: true, fullName: true, email: true, role: true}}),
+   600→    db.investorProfile.findMany({select: {advisorId: true}}),
+   601→    db.mandate.findMany({where: {status: 'active'}, select: {advisorId: true, userId: true}}),
+   602→    db.revenueEvent.findMany({select: {grossUsd: true, order: {select: {userId: true, advisorId: true}}}}),
+   603→  ])
+   604→
+   605→  const profileAdvisor = new Map(profiles.filter((p) => p.advisorId).map((p) => [p.userId, p.advisorId!]))
+   606→  const mandateAdvisor = new Map(mandates.filter((m) => m.advisorId).map((m) => [m.userId, m.advisorId!]))
+   607→
+   608→  const rows = advisors.map((a) => {
+   609→    const id = a.id
+   610→    const assignedInvestors = profiles.filter((p) => p.advisorId === id).length
+   611→    const activeMandates = mandates.filter((m) => m.advisorId === id).length
+   612→    let ordersSupported = 0
+   613→    let revenueUsd = 0
+   614→    for (const e of revenueEvents) {
+   615→      const attr = e.order.advisorId ?? profileAdvisor.get(e.order.userId) ?? mandateAdvisor.get(e.order.userId)
+   616→      if (attr === id) {
+   617→        ordersSupported += 1
+   618→        revenueUsd += e.grossUsd
+   619→      }
+   620→    }
+   621→    return {advisorId: id, name: a.fullName || a.email, assignedInvestors, activeMandates, ordersSupported, revenueUsd: Math.round(revenueUsd * 100) / 100}
+   622→  })
+   623→
+   624→  return rows.filter((r) => r.assignedInvestors > 0 || r.activeMandates > 0 || r.ordersSupported > 0).sort((a, b) => b.revenueUsd - a.revenueUsd)
+   625→}
+   626→

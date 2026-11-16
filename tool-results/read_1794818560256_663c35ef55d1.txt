@@ -1,0 +1,402 @@
+     1→     1→import {NextResponse, type NextRequest} from 'next/server'
+     2→     2→import {z} from 'zod'
+     3→     3→import {db} from '@/lib/db'
+     4→     4→import {audit, notify, securityEvent} from '@/lib/auth/audit'
+     5→     5→import {hashPassword, passwordPolicyError} from '@/lib/auth/password'
+     6→     6→import {fail, clientMeta} from '@/lib/api'
+     7→     7→import {requireAdminApi, isAdminResponse, orderTransitionAllowed, isValidAdminRole, type AdminContext, type Permission} from '@/lib/admin/rbac'
+     8→     8→import {recogniseRevenue, applyRefundToLedger} from '@/lib/admin/revenue'
+     9→     9→import {dispatchAnnouncement} from '@/lib/notifications/dispatch'
+    10→    10→
+    11→    11→/**
+    12→    12→ * Admin write API — one guarded dispatcher for every mutation in the Admin
+    13→    13→ * Internal System. Pattern mirrors /api/staff (the investor-facing desk
+    14→    14→ * endpoint) with granular RBAC: every action checks its permission key,
+    15→    15→ * writes an OrderStatusEvent / compliance record where applicable, notifies
+    16→    16→ * the affected investor, and is audit-logged.
+    17→    17→ */
+    18→    18→const schema = z.object({
+    19→    19→  action: z.string(),
+    20→    20→  payload: z.record(z.string(), z.unknown()).optional(),
+    21→    21→})
+    22→    22→
+    23→    23→async function guard(permission?: Permission): Promise<{actx: AdminContext} | {response: NextResponse}> {
+    24→    24→  return requireAdminApi(permission)
+    25→    25→}
+    26→    26→
+    27→    27→const str = (p: Record<string, unknown>, k: string) => (typeof p[k] === 'string' && (p[k] as string).length > 0 ? (p[k] as string) : undefined)
+    28→    28→const strOrNull = (p: Record<string, unknown>, k: string) => (k in p ? (typeof p[k] === 'string' && (p[k] as string).length > 0 ? (p[k] as string) : null) : undefined)
+    29→    29→const bool = (p: Record<string, unknown>, k: string) => (typeof p[k] === 'boolean' ? (p[k] as boolean) : undefined)
+    30→    30→const int = (p: Record<string, unknown>, k: string) => (typeof p[k] === 'number' && Number.isFinite(p[k]) ? Math.trunc(p[k] as number) : undefined)
+    31→    31→
+    32→    32→export async function POST(req: NextRequest) {
+    33→    33→  const parsed = schema.safeParse(await req.json().catch(() => null))
+    34→    34→  if (!parsed.success) return fail('Invalid request.')
+    35→    35→  const {action} = parsed.data
+    36→    36→  const p = (parsed.data.payload ?? {}) as Record<string, unknown>
+    37→    37→  const meta = clientMeta(req)
+    38→    38→
+    39→    39→  // --------------------------------------------------------------------------
+    40→    40→  // Investors — verification, tiers, advisor assignment, freeze
+    41→    41→  // --------------------------------------------------------------------------
+    42→    42→  if (action === 'investor.update') {
+    43→    43→    const g = await guard('investors.manage')
+    44→    44→    if (isAdminResponse(g)) return g.response
+    45→    45→    const {actx} = g
+    46→    46→    const userId = str(p, 'userId')
+    47→    47→    if (!userId) return fail('userId required.')
+    48→    48→    const before = await db.investorProfile.findUnique({where: {userId}})
+    49→    49→    if (!before) return fail('Investor not found.', 404)
+    50→    50→
+    51→    51→    const data: Record<string, unknown> = {}
+    52→    52→    for (const key of ['verificationStatus', 'kycStatus', 'amlStatus', 'accessTier', 'classification']) {
+    53→    53→      const v = str(p, key)
+    54→    54→      if (v) data[key] = v
+    55→    55→    }
+    56→    56→    if ('advisorId' in p) {
+    57→    57→      const v = strOrNull(p, 'advisorId')
+    58→    58→      if (v) {
+    59→    59→        const advisor = await db.user.findUnique({where: {id: v}})
+    60→    60→        if (!advisor || !['advisor', 'admin'].includes(advisor.role)) return fail('Advisor must be a staff member.')
+    61→    61→      }
+    62→    62→      data.advisorId = v
+    63→    63→    }
+    64→    64→    if ('ndaAccepted' in p) data.ndaAccepted = bool(p, 'ndaAccepted') ?? false
+    65→    65→    if ('source' in p) data.source = strOrNull(p, 'source')
+    66→    66→    if ('notes' in p) data.notes = strOrNull(p, 'notes')
+    67→    67→
+    68→    68→    await db.investorProfile.update({where: {userId}, data: data as never})
+    69→    69→
+    70→    70→    if (data.accessTier && data.accessTier !== before.accessTier) {
+    71→    71→      await notify({userId, type: 'system', event: 'security.tier_changed', title: 'Access tier updated', body: `Your Murivest access tier is now ${(data.accessTier as string).replace('_', ' ')}. Sign in to review newly available material.`, link: '/portal', emailVars: {alertTitle: 'Access tier updated', alertDetail: `Your Murivest access tier is now ${(data.accessTier as string).replace('_', ' ')}. Newly available material can be reviewed when you next sign in.`}})
+    72→    72→    }
+    73→    73→    if (data.kycStatus === 'approved' && before.kycStatus !== 'approved') {
+    74→    74→      await notify({userId, type: 'system', event: 'security.verification_update', title: 'Verification approved', body: 'Your KYC verification is approved. Confidential opportunities and off-market material are now visible where permitted.', link: '/portal/discover', emailVars: {alertTitle: 'Verification approved', alertDetail: 'Your KYC verification is approved. Confidential opportunities and off-market material are now visible where permitted.'}})
+    75→    75→    }
+    76→    76→    await db.complianceReview.create({
+    77→    77→      data: {
+    78→    78→        subjectUserId: userId,
+    79→    79→        reviewerId: actx.auth.user.id,
+    80→    80→        decision: 'note',
+    81→    81→        notes: 'Profile fields updated',
+    82→    82→        detail: {before: {verificationStatus: before.verificationStatus, kycStatus: before.kycStatus, amlStatus: before.amlStatus, accessTier: before.accessTier, advisorId: before.advisorId, ndaAccepted: before.ndaAccepted}, after: data} as never,
+    83→    83→      },
+    84→    84→    }).catch(() => {})
+    85→    85→    await audit({actorId: actx.auth.user.id, actorType: 'admin', action: 'admin.investor_updated', entity: 'investor', entityId: userId, detail: data, ...meta})
+    86→    86→    return NextResponse.json({ok: true})
+    87→    87→  }
+    88→    88→
+    89→    89→  if (action === 'investor.freeze' || action === 'investor.unfreeze') {
+    90→    90→    const g = await guard('investors.manage')
+    91→    91→    if (isAdminResponse(g)) return g.response
+    92→    92→    const {actx} = g
+    93→    93→    const userId = str(p, 'userId')
+    94→    94→    const reason = str(p, 'reason')
+    95→    95→    if (!userId) return fail('userId required.')
+    96→    96→    const target = await db.user.findUnique({where: {id: userId}})
+    97→    97→    if (!target) return fail('Account not found.', 404)
+    98→    98→    const status = action === 'investor.freeze' ? 'suspended' : 'active'
+    99→    99→    await db.user.update({where: {id: userId}, data: {status: status as never}})
+   100→   100→    if (action === 'investor.freeze') {
+   101→   101→      await db.session.updateMany({where: {userId, revokedAt: null}, data: {revokedAt: new Date()}})
+   102→   102→      await db.complianceReview.create({
+   103→   103→        data: {subjectUserId: userId, reviewerId: actx.auth.user.id, decision: 'escalated', notes: reason ?? 'Account frozen', riskFlags: [{flag: 'account_frozen', severity: 'high'}] as never, detail: {status} as never},
+   104→   104→      }).catch(() => {})
+   105→   105→    }
+   106→   106→    await securityEvent({userId, type: action === 'investor.freeze' ? 'account_locked' : 'login', ...meta, detail: {by: actx.auth.user.id, reason}})
+   107→   107→    await audit({actorId: actx.auth.user.id, actorType: 'admin', action: `admin.${action.split('.')[1]}`, entity: 'user', entityId: userId, detail: {status, reason}, ...meta})
+   108→   108→    return NextResponse.json({ok: true})
+   109→   109→  }
+   110→   110→
+   111→   111→  // --------------------------------------------------------------------------
+   112→   112→  // Compliance review record (KYC/AML queue decisions)
+   113→   113→  // --------------------------------------------------------------------------
+   114→   114→  if (action === 'compliance.review') {
+   115→   115→    const g = await guard('compliance.review')
+   116→   116→    if (isAdminResponse(g)) return g.response
+   117→   117→    const {actx} = g
+   118→   118→    const userId = str(p, 'userId')
+   119→   119→    const decision = str(p, 'decision')
+   120→   120→    if (!userId || !decision || !['approved', 'rejected', 'escalated', 'note'].includes(decision)) return fail('userId and a valid decision required.')
+   121→   121→    const notes = str(p, 'notes')
+   122→   122→    const riskFlags = Array.isArray(p.riskFlags) ? (p.riskFlags as unknown[]) : []
+   123→   123→
+   124→   124→    const before = await db.investorProfile.findUnique({where: {userId}})
+   125→   125→    await db.complianceReview.create({
+   126→   126→      data: {subjectUserId: userId, reviewerId: actx.auth.user.id, decision: decision as never, notes: notes ?? null, riskFlags: riskFlags as never, detail: {before: before ? {verificationStatus: before.verificationStatus, kycStatus: before.kycStatus, amlStatus: before.amlStatus, accessTier: before.accessTier} : null} as never},
+   127→   127→    })
+   128→   128→    await audit({actorId: actx.auth.user.id, actorType: 'admin', action: `admin.compliance_${decision}`, entity: 'investor', entityId: userId, detail: {notes, riskFlags}, ...meta})
+   129→   129→    return NextResponse.json({ok: true})
+   130→   130→  }
+   131→   131→
+   132→   132→  // --------------------------------------------------------------------------
+   133→   133→  // Orders Engine — assignment, status lifecycle, priority, attribution
+   134→   134→  // --------------------------------------------------------------------------
+   135→   135→  if (action === 'order.assign') {
+   136→   136→    const g = await guard('orders.manage')
+   137→   137→    if (isAdminResponse(g)) return g.response
+   138→   138→    const {actx} = g
+   139→   139→    const orderId = str(p, 'orderId')
+   140→   140→    if (!orderId) return fail('orderId required.')
+   141→   141→    const order = await db.order.findUnique({where: {id: orderId}})
+   142→   142→    if (!order) return fail('Order not found.', 404)
+   143→   143→    const assignedToId = strOrNull(p, 'assignedToId')
+   144→   144→    if (assignedToId) {
+   145→   145→      const assignee = await db.user.findUnique({where: {id: assignedToId}})
+   146→   146→      if (!assignee || !['advisor', 'admin'].includes(assignee.role)) return fail('Assignee must be a staff member.')
+   147→   147→    }
+   148→   148→    await db.order.update({where: {id: orderId}, data: {assignedToId}})
+   149→   149→    if (assignedToId) {
+   150→   150→      await notify({userId: assignedToId, type: 'system', title: `Order assigned — ${order.reference}`, body: `“${order.briefTitle}” has been assigned to you for fulfilment.`, link: `/admin/orders/${orderId}`})
+   151→   151→    }
+   152→   152→    await audit({actorId: actx.auth.user.id, actorType: 'admin', action: 'admin.order_assigned', entity: 'order', entityId: orderId, detail: {assignedToId}, ...meta})
+   153→   153→    return NextResponse.json({ok: true})
+   154→   154→  }
+   155→   155→
+   156→   156→  if (action === 'order.status') {
+   157→   157→    const g = await guard('orders.manage')
+   158→   158→    if (isAdminResponse(g)) return g.response
+   159→   159→    const {actx} = g
+   160→   160→    const orderId = str(p, 'orderId')
+   161→   161→    const status = str(p, 'status')
+   162→   162→    const note = str(p, 'note')
+   163→   163→    if (!orderId || !status) return fail('orderId and status required.')
+   164→   164→    const order = await db.order.findUnique({where: {id: orderId}, include: {payments: true}})
+   165→   165→    if (!order) return fail('Order not found.', 404)
+   166→   166→    if (order.status === status) return fail('Order is already in that status.')
+   167→   167→    if (!orderTransitionAllowed(order.status, status)) return fail(`Invalid transition: ${order.status} → ${status}.`)
+   168→   168→
+   169→   169→    const data: Record<string, unknown> = {status}
+   170→   170→    if (status === 'delivered') data.deliveredAt = new Date()
+   171→   171→    if (status === 'closed') data.closedAt = new Date()
+   172→   172→    if (status === 'cancelled') {
+   173→   173→      data.cancelledAt = new Date()
+   174→   174→      data.cancellationReason = note ?? 'Cancelled by Murivest'
+   175→   175→    }
+   176→   176→    const trackingNumber = str(p, 'trackingNumber')
+   177→   177→    if (trackingNumber !== undefined) data.trackingNumber = trackingNumber
+   178→   178→    const deliveryDocumentId = str(p, 'deliveryDocumentId')
+   179→   179→    if (deliveryDocumentId !== undefined) data.deliveryDocumentId = deliveryDocumentId || null
+   180→   180→
+   181→   181→    await db.order.update({where: {id: orderId}, data: data as never})
+   182→   182→    await db.orderStatusEvent.create({data: {orderId, fromStatus: order.status, toStatus: status, changedById: actx.auth.user.id, note: note ?? null}})
+   183→   183→
+   184→   184→    // Delivery: recognise revenue + release the brief into the investor's
+   185→   185→    // secure data room when a Sanity document is attached.
+   186→   186→    if (status === 'delivered') {
+   187→   187→      await recogniseRevenue(orderId, actx.auth.user.id)
+   188→   188→      const docId = (deliveryDocumentId ?? order.deliveryDocumentId) || null
+   189→   189→      if (docId) {
+   190→   190→        const existing = await db.documentGrant.findFirst({where: {sanityDocumentId: docId, userId: order.userId}})
+   191→   191→        if (!existing) {
+   192→   192→          await db.documentGrant.create({data: {sanityDocumentId: docId, userId: order.userId, grantedById: actx.auth.user.id, permission: 'download'}})
+   193→   193→        }
+   194→   194→      }
+   195→   195→    }
+   196→   196→
+   197→   197→    const statusLabel = status.replace(/_/g, ' ')
+   198→   198→    const event =
+   199→   199→      status === 'delivered' ? 'order.delivered'
+   200→   200→      : status === 'payment_confirmed' ? 'order.payment_confirmed'
+   201→   201→      : status === 'processing' ? 'order.in_progress'
+   202→   202→      : status === 'ready' ? 'order.ready'
+   203→   203→      : 'order.status_change'
+   204→   204→    await notify({
+   205→   205→      userId: order.userId,
+   206→   206→      type: 'order_status',
+   207→   207→      event,
+   208→   208→      priority: ['delivered', 'ready', 'payment_confirmed'].includes(status) ? 'high' : 'normal',
+   209→   209→      title: `Order ${order.reference} · ${statusLabel}`,
+   210→   210→      body:
+   211→   211→        status === 'delivered'
+   212→   212→          ? `“${order.briefTitle}” has been delivered${order.format === 'hard_copy' ? ' by courier' : ' to your Document Room'}.`
+   213→   213→          : `Your order “${order.briefTitle}” is now ${statusLabel}.`,
+   214→   214→      link: status === 'delivered' ? '/portal/documents' : '/portal/orders',
+   215→   215→      dedupeKey: `order.${order.id}.${status}`,
+   216→   216→      emailVars: {
+   217→   217→        briefTitle: order.briefTitle,
+   218→   218→        orderRef: order.reference,
+   219→   219→        statusLabel: statusLabel.replace(/^\w/, (c) => c.toUpperCase()),
+   220→   220→        statusNote:
+   221→   221→          status === 'delivered'
+   222→   222→            ? 'The brief is in your secure Document Room, watermarked for your account.'
+   223→   223→            : `Your order “${order.briefTitle}” is now ${statusLabel}.`,
+   224→   224→      },
+   225→   225→    })
+   226→   226→    await audit({actorId: actx.auth.user.id, actorType: 'admin', action: 'admin.order_status', entity: 'order', entityId: orderId, detail: {from: order.status, to: status, note, deliveryDocumentId}, ...meta})
+   227→   227→    return NextResponse.json({ok: true})
+   228→   228→  }
+   229→   229→
+   230→   230→  if (action === 'order.update') {
+   231→   231→    const g = await guard('orders.manage')
+   232→   232→    if (isAdminResponse(g)) return g.response
+   233→   233→    const {actx} = g
+   234→   234→    const orderId = str(p, 'orderId')
+   235→   235→    if (!orderId) return fail('orderId required.')
+   236→   236→    const order = await db.order.findUnique({where: {id: orderId}})
+   237→   237→    if (!order) return fail('Order not found.', 404)
+   238→   238→
+   239→   239→    const data: Record<string, unknown> = {}
+   240→   240→    const priority = str(p, 'priority')
+   241→   241→    if (priority && ['low', 'normal', 'high', 'urgent'].includes(priority)) data.priority = priority
+   242→   242→    if ('dueAt' in p) {
+   243→   243→      const v = str(p, 'dueAt')
+   244→   244→      data.dueAt = v ? new Date(v) : null
+   245→   245→    }
+   246→   246→    if ('advisorId' in p) {
+   247→   247→      const v = strOrNull(p, 'advisorId')
+   248→   248→      if (v) {
+   249→   249→        const advisor = await db.user.findUnique({where: {id: v}})
+   250→   250→        if (!advisor || !['advisor', 'admin'].includes(advisor.role)) return fail('Advisor must be a staff member.')
+   251→   251→      }
+   252→   252→      data.advisorId = v
+   253→   253→    }
+   254→   254→    if ('trackingNumber' in p) data.trackingNumber = strOrNull(p, 'trackingNumber')
+   255→   255→    if ('transactionId' in p) data.transactionId = strOrNull(p, 'transactionId')
+   256→   256→    if (Object.keys(data).length === 0) return fail('No changes supplied.')
+   257→   257→
+   258→   258→    await db.order.update({where: {id: orderId}, data: data as never})
+   259→   259→    await audit({actorId: actx.auth.user.id, actorType: 'admin', action: 'admin.order_updated', entity: 'order', entityId: orderId, detail: data, ...meta})
+   260→   260→    return NextResponse.json({ok: true})
+   261→   261→  }
+   262→   262→
+   263→   263→  // --------------------------------------------------------------------------
+   264→   264→  // Payments — verification & reconciliation
+   265→   265→  // --------------------------------------------------------------------------
+   266→   266→  if (action === 'payment.verify') {
+   267→   267→    const g = await guard('payments.verify')
+   268→   268→    if (isAdminResponse(g)) return g.response
+   269→   269→    const {actx} = g
+   270→   270→    const paymentId = str(p, 'paymentId')
+   271→   271→    const decision = str(p, 'decision')
+   272→   272→    const note = str(p, 'note')
+   273→   273→    if (!paymentId || !decision || !['verified', 'rejected'].includes(decision)) return fail('paymentId and decision (verified|rejected) required.')
+   274→   274→    const payment = await db.payment.findUnique({where: {id: paymentId}, include: {order: true}})
+   275→   275→    if (!payment) return fail('Payment not found.', 404)
+   276→   276→
+   277→   277→    await db.payment.update({where: {id: paymentId}, data: {status: decision as never, verifiedById: actx.auth.user.id, verifiedAt: new Date(), note: note ?? null}})
+   278→   278→
+   279→   279→    if (decision === 'verified') {
+   280→   280→      const order = payment.order
+   281→   281→      if (['pending', 'awaiting_payment'].includes(order.status)) {
+   282→   282→        await db.order.update({where: {id: order.id}, data: {status: 'payment_confirmed'}})
+   283→   283→        await db.orderStatusEvent.create({data: {orderId: order.id, fromStatus: order.status, toStatus: 'payment_confirmed', changedById: actx.auth.user.id, note: 'Payment verified'}})
+   284→   284→      }
+   285→   285→      await notify({userId: payment.userId, type: 'order_status', event: 'order.payment_confirmed', title: 'Payment confirmed', body: `Payment for ${payment.order.reference} is confirmed. Preparation of “${payment.order.briefTitle}” will now be scheduled.`, link: '/portal/orders', emailVars: {briefTitle: payment.order.briefTitle, orderRef: payment.order.reference, statusLabel: 'Payment confirmed', statusNote: `Payment for ${payment.order.reference} is confirmed. Preparation of “${payment.order.briefTitle}” will now be scheduled.`}})
+   286→   286→    } else {
+   287→   287→      await notify({userId: payment.userId, type: 'order_status', event: 'order.payment_issue', title: 'Payment could not be verified', body: `We could not verify the payment for ${payment.order.reference}. ${note || 'Please contact your advisor.'}`, link: '/portal/orders', emailVars: {briefTitle: payment.order.briefTitle, orderRef: payment.order.reference, statusLabel: 'Payment could not be verified', statusNote: `We could not verify the payment for ${payment.order.reference}. ${note || 'Please contact your advisor.'}`}})
+   288→   288→    }
+   289→   289→    await audit({actorId: actx.auth.user.id, actorType: 'admin', action: 'admin.payment_verified', entity: 'payment', entityId: paymentId, detail: {decision, note}, ...meta})
+   290→   290→    return NextResponse.json({ok: true})
+   291→   291→  }
+   292→   292→
+   293→   293→  // --------------------------------------------------------------------------
+   294→   294→  // Refunds / adjustments (controlled)
+   295→   295→  // --------------------------------------------------------------------------
+   296→   296→  if (action === 'refund.propose') {
+   297→   297→    const g = await guard('refunds.manage')
+   298→   298→    if (isAdminResponse(g)) return g.response
+   299→   299→    const {actx} = g
+   300→   300→    const orderId = str(p, 'orderId')
+   301→   301→    const reason = str(p, 'reason')
+   302→   302→    const amountUsd = typeof p.amountUsd === 'number' ? (p.amountUsd as number) : undefined
+   303→   303→    if (!orderId || !reason || !amountUsd || amountUsd <= 0) return fail('orderId, positive amountUsd and reason required.')
+   304→   304→    const order = await db.order.findUnique({where: {id: orderId}})
+   305→   305→    if (!order) return fail('Order not found.', 404)
+   306→   306→    const refund = await db.refundAdjustment.create({data: {orderId, amountUsd, amountKes: typeof p.amountKes === 'number' ? (p.amountKes as number) : 0, reason, requestedById: actx.auth.user.id}})
+   307→   307→    await audit({actorId: actx.auth.user.id, actorType: 'admin', action: 'admin.refund_proposed', entity: 'order', entityId: orderId, detail: {refundId: refund.id, amountUsd, reason}, ...meta})
+   308→   308→    return NextResponse.json({ok: true, refundId: refund.id})
+   309→   309→  }
+   310→   310→
+   311→   311→  if (action === 'refund.review') {
+   312→   312→    const g = await guard('refunds.manage')
+   313→   313→    if (isAdminResponse(g)) return g.response
+   314→   314→    const {actx} = g
+   315→   315→    const refundId = str(p, 'refundId')
+   316→   316→    const decision = str(p, 'decision')
+   317→   317→    if (!refundId || !decision || !['approved', 'rejected'].includes(decision)) return fail('refundId and decision (approved|rejected) required.')
+   318→   318→    const refund = await db.refundAdjustment.findUnique({where: {id: refundId}, include: {order: true}})
+   319→   319→    if (!refund) return fail('Refund not found.', 404)
+   320→   320→    if (refund.status !== 'proposed') return fail('Only proposed refunds can be reviewed.')
+   321→   321→
+   322→   322→    await db.refundAdjustment.update({where: {id: refundId}, data: {status: decision === 'approved' ? 'approved' : 'rejected', reviewedById: actx.auth.user.id, reviewedAt: new Date()}})
+   323→   323→    if (decision === 'approved') {
+   324→   324→      await applyRefundToLedger(refund.orderId, refund.amountUsd)
+   325→   325→      await notify({userId: refund.order.userId, type: 'order_status', event: 'order.refund', title: 'Refund approved', body: `A refund of $${refund.amountUsd.toLocaleString('en-GB')} has been approved for ${refund.order.reference}. ${refund.reason}`, link: '/portal/orders', emailVars: {briefTitle: refund.order.briefTitle, orderRef: refund.order.reference, statusLabel: 'Refund approved', statusNote: `A refund of $${refund.amountUsd.toLocaleString('en-GB')} has been approved for ${refund.order.reference}. ${refund.reason}`}})
+   326→   326→    }
+   327→   327→    await audit({actorId: actx.auth.user.id, actorType: 'admin', action: `admin.refund_${decision}`, entity: 'order', entityId: refund.orderId, detail: {refundId, amountUsd: refund.amountUsd}, ...meta})
+   328→   328→    return NextResponse.json({ok: true})
+   329→   329→  }
+   330→   330→
+   331→   331→  // --------------------------------------------------------------------------
+   332→   332→  // Mandates & pipeline
+   333→   333→  // --------------------------------------------------------------------------
+   334→   334→  if (action === 'mandate.update') {
+   335→   335→    const g = await guard('mandates.manage')
+   336→   336→    if (isAdminResponse(g)) return g.response
+   337→   337→    const {actx} = g
+   338→   338→    const mandateId = str(p, 'mandateId')
+   339→   339→    if (!mandateId) return fail('mandateId required.')
+   340→   340→    const mandate = await db.mandate.findUnique({where: {id: mandateId}})
+   341→   341→    if (!mandate) return fail('Mandate not found.', 404)
+   342→   342→
+   343→   343→    const data: Record<string, unknown> = {}
+   344→   344→    const status = str(p, 'status')
+   345→   345→    if (status && ['draft', 'submitted', 'active', 'paused', 'closed', 'rejected'].includes(status)) {
+   346→   346→      data.status = status
+   347→   347→      if (status === 'active' && !mandate.activatedAt) data.activatedAt = new Date()
+   348→   348→      if (status === 'closed') data.closedAt = new Date()
+   349→   349→    }
+   350→   350→    const stage = str(p, 'stage')
+   351→   351→    if (stage && ['sourcing', 'qualification', 'matching', 'negotiation', 'closing', 'post_closing'].includes(stage)) data.stage = stage
+   352→   352→    const probability = int(p, 'probability')
+   353→   353→    if (probability != null) data.probability = Math.min(100, Math.max(0, probability))
+   354→   354→    if ('nextAction' in p) data.nextAction = strOrNull(p, 'nextAction')
+   355→   355→    if ('nextActionDue' in p) {
+   356→   356→      const v = str(p, 'nextActionDue')
+   357→   357→      data.nextActionDue = v ? new Date(v) : null
+   358→   358→    }
+   359→   359→    if ('advisorId' in p) data.advisorId = strOrNull(p, 'advisorId')
+   360→   360→    if (Object.keys(data).length === 0) return fail('No changes supplied.')
+   361→   361→
+   362→   362→    await db.mandate.update({where: {id: mandateId}, data: data as never})
+   363→   363→    if (data.status === 'active' && mandate.status !== 'active') {
+   364→   364→      await notify({userId: mandate.userId, type: 'mandate', event: 'mandate.status', title: `Mandate ${mandate.reference} activated`, body: 'Your acquisition mandate is live. Matching opportunities will be surfaced in Discover and communicated by your advisor.', link: '/portal/mandates', emailVars: {mandateRef: mandate.reference, mandateTitle: mandate.title, mandateStatus: 'activated', mandateNote: 'Your acquisition mandate is live. Matching opportunities will be surfaced in Discover and communicated by your advisor.'}})
+   365→   365→    }
+   366→   366→    await audit({actorId: actx.auth.user.id, actorType: 'admin', action: 'admin.mandate_updated', entity: 'mandate', entityId: mandateId, detail: data, ...meta})
+   367→   367→    return NextResponse.json({ok: true})
+   368→   368→  }
+   369→   369→
+   370→   370→  // --------------------------------------------------------------------------
+   371→   371→  // Documents & data room
+   372→   372→  // --------------------------------------------------------------------------
+   373→   373→  if (action === 'document.grant') {
+   374→   374→    const g = await guard('documents.manage')
+   375→   375→    if (isAdminResponse(g)) return g.response
+   376→   376→    const {actx} = g
+   377→   377→    const sanityDocumentId = str(p, 'sanityDocumentId')
+   378→   378→    const userId = str(p, 'userId')
+   379→   379→    const organisationId = str(p, 'organisationId')
+   380→   380→    const permission = str(p, 'permission') ?? 'view'
+   381→   381→    const expiresAt = str(p, 'expiresAt')
+   382→   382→    if (!sanityDocumentId || (!userId && !organisationId)) return fail('sanityDocumentId and userId or organisationId required.')
+   383→   383→    const existing = await db.documentGrant.findFirst({where: {sanityDocumentId, userId: userId ?? null, organisationId: organisationId ?? null}})
+   384→   384→    if (existing) {
+   385→   385→      await db.documentGrant.update({where: {id: existing.id}, data: {permission: permission as never, expiresAt: expiresAt ? new Date(expiresAt) : null}})
+   386→   386→    } else {
+   387→   387→      await db.documentGrant.create({data: {sanityDocumentId, userId: userId || null, organisationId: organisationId || null, grantedById: actx.auth.user.id, permission: permission as never, expiresAt: expiresAt ? new Date(expiresAt) : null}})
+   388→   388→    }
+   389→   389→    if (userId) {
+   390→   390→      const docTitle = str(p, 'title')
+   391→   391→      await notify({userId, type: 'document', event: 'document.granted', title: 'Document access granted', body: docTitle ? `“${docTitle}” has been shared with you in the secure Document Room.` : 'A document has been shared with you in the secure Document Room.', link: '/portal/documents', emailVars: {documentTitle: docTitle ?? 'A shared document', documentNote: ' with download permission'}})
+   392→   392→    }
+   393→   393→    await audit({actorId: actx.auth.user.id, actorType: 'admin', action: 'admin.document_granted', entity: 'document', entityId: sanityDocumentId, detail: {userId, organisationId, permission, expiresAt}, ...meta})
+   394→   394→    return NextResponse.json({ok: true})
+   395→   395→  }
+   396→   396→
+   397→   397→  if (action === 'document.revoke') {
+   398→   398→    const g = await guard('documents.manage')
+   399→   399→    if (isAdminResponse(g)) return g.response
+   400→   400→    const {actx} = g
+
+[showing lines 1-400 of 687; use offset=401 with limit to continue reading]

@@ -1,6 +1,7 @@
-import {db} from '@/lib/db'
+import {auditTable, supabase, newId, nowIso} from '@/lib/supabase'
 import {notifyUser} from '@/lib/notifications/dispatch'
 import type {NotificationPriority} from '@/lib/notifications/events'
+import {toIpString} from './request-meta'
 
 /**
  * Audit trail + security events + notifications.
@@ -13,6 +14,10 @@ import type {NotificationPriority} from '@/lib/notifications/events'
  * to the multi-channel dispatcher (src/lib/notifications/dispatch.ts) which
  * resolves the investor's channel × category preferences, quiet hours and
  * digest opt-in, then records every delivery attempt in the ledger.
+ *
+ * Storage: Supabase client (service role). Audit rows live in the `audit`
+ * schema (audit.logs — see auditTable() in src/lib/supabase.ts); security
+ * events in portal.security_events.
  */
 
 export type ActorKind = 'user' | 'advisor' | 'admin' | 'system'
@@ -27,18 +32,22 @@ export async function audit(params: {
   ip?: string | null
   userAgent?: string | null
 }) {
-  await db.auditLog.create({
-    data: {
-      actorId: params.actorId ?? null,
-      actorType: (params.actorType ?? 'user') as ActorKind,
+  try {
+    await auditTable().insert({
+      id: newId(),
+      actor_id: params.actorId ?? null,
+      actor_type: (params.actorType ?? 'user') as ActorKind,
       action: params.action,
       entity: params.entity ?? null,
-      entityId: params.entityId ?? null,
-      detail: (params.detail ?? undefined) as never,
+      entity_id: params.entityId ?? null,
+      detail: params.detail ?? null,
       ip: params.ip ?? null,
-      userAgent: params.userAgent ?? null,
-    },
-  }).catch(() => {}) // audit must never break the primary flow
+      user_agent: params.userAgent ?? null,
+      created_at: nowIso(),
+    })
+  } catch {
+    // audit must never break the primary flow
+  }
 }
 
 export async function securityEvent(params: {
@@ -48,15 +57,19 @@ export async function securityEvent(params: {
   userAgent?: string | null
   detail?: Record<string, unknown>
 }) {
-  await db.securityEvent.create({
-    data: {
-      userId: params.userId ?? null,
+  try {
+    await supabase.from('security_events').insert({
+      id: newId(),
+      user_id: params.userId ?? null,
       type: params.type,
       ip: params.ip ?? null,
-      userAgent: params.userAgent ?? null,
+      user_agent: params.userAgent ?? null,
       detail: params.detail ? JSON.stringify(params.detail) : null,
-    },
-  }).catch(() => {})
+      created_at: nowIso(),
+    })
+  } catch {
+    // security-event capture must never break the primary flow
+  }
 }
 
 export interface NotifyParams {

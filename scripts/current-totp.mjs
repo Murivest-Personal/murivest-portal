@@ -4,11 +4,24 @@
  * MFA secret — used for end-to-end verification of the MFA challenge flow.
  * Uses the same AES-256-GCM + RFC6238 logic as src/lib/auth/totp.ts.
  */
-import prismaPkg from '@prisma/client'
+import {createClient} from '@supabase/supabase-js'
 import {createHmac, createDecipheriv} from 'node:crypto'
+import {readFileSync} from 'node:fs'
 
-const {PrismaClient} = prismaPkg
-const db = new PrismaClient()
+// node does not read .env automatically — tiny loader for the repo-root .env
+if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+  try {
+    const txt = readFileSync(new URL('../.env', import.meta.url), 'utf8')
+    for (const line of txt.split('\n')) {
+      if (!line.trim() || line.trim().startsWith('#')) continue
+      const eq = line.indexOf('=')
+      if (eq < 1) continue
+      const k = line.slice(0, eq).trim()
+      const v = line.slice(eq + 1).trim().replace(/^['"]|['"]$/g, '')
+      if (process.env[k] === undefined) process.env[k] = v
+    }
+  } catch {}
+}
 
 const email = process.argv[2]
 if (!email) {
@@ -16,15 +29,28 @@ if (!email) {
   process.exit(1)
 }
 
-const user = await db.user.findUnique({where: {email: email.toLowerCase()}})
-if (!user?.mfaSecretEnc) {
+const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+const key = process.env.SUPABASE_SERVICE_ROLE_KEY
+if (!url || !key) {
+  console.error('Set NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (see .env.example).')
+  process.exit(1)
+}
+const supabase = createClient(url, key, {db: {schema: 'portal'}, auth: {persistSession: false, autoRefreshToken: false}})
+
+const lookup = await supabase.from('users').select('id, mfa_secret_enc').eq('email', email.toLowerCase()).maybeSingle()
+if (lookup.error) {
+  console.error(`User lookup failed: ${lookup.error.message}`)
+  process.exit(1)
+}
+const mfaSecretEnc = lookup.data?.mfa_secret_enc
+if (!mfaSecretEnc) {
   console.error('No MFA secret stored for this user (run setup first).')
   process.exit(1)
 }
 
-const key = createHmac('sha256', process.env.APP_ENCRYPTION_KEY || process.env.SESSION_SECRET || 'murivest-dev-only-key').update('totp').digest()
-const [ivB64, dataB64, tagB64] = user.mfaSecretEnc.split('.')
-const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(ivB64, 'base64url'))
+const encKey = createHmac('sha256', process.env.APP_ENCRYPTION_KEY || process.env.SESSION_SECRET || 'murivest-dev-only-key').update('totp').digest()
+const [ivB64, dataB64, tagB64] = mfaSecretEnc.split('.')
+const decipher = createDecipheriv('aes-256-gcm', encKey, Buffer.from(ivB64, 'base64url'))
 decipher.setAuthTag(Buffer.from(tagB64, 'base64url'))
 const secret = Buffer.concat([decipher.update(Buffer.from(dataB64, 'base64url')), decipher.final()]).toString('utf8')
 
@@ -49,5 +75,3 @@ const hmac = createHmac('sha1', keyBuf).update(counter).digest()
 const offset = hmac[hmac.length - 1] & 0xf
 const code = ((hmac[offset] & 0x7f) << 24) | (hmac[offset + 1] << 16) | (hmac[offset + 2] << 8) | hmac[offset + 3]
 console.log(String(code % 1_000_000).padStart(6, '0'))
-
-await db.$disconnect()

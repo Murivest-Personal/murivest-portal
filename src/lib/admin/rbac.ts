@@ -1,8 +1,9 @@
 import {cache} from 'react'
 import {redirect} from 'next/navigation'
 import {NextResponse} from 'next/server'
-import {db} from '@/lib/db'
+import {supabase, unwrapNullable} from '@/lib/supabase'
 import {getAuthContext, type AuthContext} from '@/lib/auth/context'
+import type {StaffProfileRow} from '@/lib/db-types'
 
 /**
  * Admin Internal System — Role-Based Access Control.
@@ -184,8 +185,11 @@ export interface AdminContext {
 
 /** Resolve the granular admin role for a signed-in staff user (request-cached). */
 export const resolveAdminRole = cache(async (userId: string, coarseRole: string): Promise<AdminRole | null> => {
-  const staff = await db.staffProfile.findUnique({where: {userId}})
-  if (staff) return staff.isActive ? (staff.adminRole as AdminRole) : null
+  const staffRow = unwrapNullable<StaffProfileRow>(
+    await supabase.from('staff_profiles').select('*').eq('user_id', userId).maybeSingle(),
+    'staff.byUser',
+  )
+  if (staffRow) return staffRow.is_active ? (staffRow.admin_role as AdminRole) : null
   if (coarseRole === 'admin') return 'super_admin'
   if (coarseRole === 'advisor') return 'advisor'
   return null
@@ -232,8 +236,8 @@ export function isAdminResponse(x: unknown): x is {response: NextResponse} {
 
 /**
  * Advisor scoping — advisors see only investors assigned to them.
- * Returns a Prisma `where` fragment for investor-scoped queries, or null
- * when the actor may see all investors.
+ * Returns an app-level scope fragment ({advisorId} filter) for
+ * investor-scoped queries, or null when the actor may see all investors.
  */
 export function investorScopeWhere(actx: AdminContext): {advisorId: string} | null {
   if (actx.can('investors.view.all')) return null

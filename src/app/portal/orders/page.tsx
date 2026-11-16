@@ -1,5 +1,6 @@
 import type {Metadata} from 'next'
-import {db} from '@/lib/db'
+import {supabase, unwrap, toCamelList} from '@/lib/supabase'
+import type {OrderRow as OrderDbRow} from '@/lib/db-types'
 import {requirePortalUser} from '@/lib/auth/context'
 import {getBriefs} from '@/lib/sanity/queries'
 import {isSanityConfigured} from '@/lib/sanity/client'
@@ -23,7 +24,12 @@ export default async function OrdersPage({
 
   const [briefs, orders] = await Promise.all([
     getBriefs(ctx.effectiveTier),
-    db.order.findMany({where: {userId: ctx.user.id}, orderBy: {createdAt: 'desc'}}),
+    supabase
+      .from('orders')
+      .select('*')
+      .eq('user_id', ctx.user.id)
+      .order('created_at', {ascending: false})
+      .then((res) => toCamelList(unwrap<OrderDbRow[]>(res, 'orders.list'))),
   ])
 
   const orderRows: OrderRow[] = orders.map((o) => ({
@@ -44,8 +50,8 @@ export default async function OrdersPage({
     phone: o.phone,
     contactName: o.contactName,
     contactEmail: o.contactEmail,
-    createdAt: o.createdAt.toISOString(),
-    deliveredAt: o.deliveredAt?.toISOString() ?? null,
+    createdAt: o.createdAt,
+    deliveredAt: o.deliveredAt ?? null,
     customScope: o.customScope,
   }))
 

@@ -1,5 +1,6 @@
 import type {Metadata} from 'next'
-import {db} from '@/lib/db'
+import {supabase, unwrap, toCamelList} from '@/lib/supabase'
+import type {MandateRow} from '@/lib/db-types'
 import {requirePortalUser} from '@/lib/auth/context'
 import {getOpportunities} from '@/lib/sanity/queries'
 import {isSanityConfigured} from '@/lib/sanity/client'
@@ -23,7 +24,12 @@ export default async function DiscoverPage() {
     getSavedIds(uid),
     getViewCounts(),
     getOpportunities(ctx.effectiveTier),
-    db.mandate.findMany({where: {userId: uid, status: {in: ['active', 'submitted']}}}),
+    supabase
+      .from('mandates')
+      .select('*')
+      .eq('user_id', uid)
+      .in('status', ['active', 'submitted'])
+      .then((res) => toCamelList(unwrap<MandateRow[]>(res, 'mandates.list'))),
   ])
 
   const items = opportunities.map((o) => {

@@ -1,9 +1,10 @@
 import {NextResponse, type NextRequest} from 'next/server'
-import {db} from '@/lib/db'
+import {supabase, unwrap, unwrapNullable, nowIso} from '@/lib/supabase'
 import {consumeAuthToken} from '@/lib/auth/tokens'
 import {audit, notify} from '@/lib/auth/audit'
 import {clientMeta} from '@/lib/api'
 import {COMPANY} from '@/lib/constants'
+import type {UserRow} from '@/lib/db-types'
 
 /** Email verification landing (link from the welcome email). */
 export async function GET(req: NextRequest) {
@@ -13,15 +14,26 @@ export async function GET(req: NextRequest) {
   const userId = await consumeAuthToken(token, 'email_verify')
   if (!userId) return NextResponse.redirect(`${site}/portal?verified=expired`)
 
-  const user = await db.user.findUnique({where: {id: userId}})
-  if (!user) return NextResponse.redirect(`${site}/?auth=invalid`)
+  const userRow = unwrapNullable<UserRow>(
+    await supabase.from('users').select('*').eq('id', userId).maybeSingle(),
+    'user.byId',
+  )
+  if (!userRow) return NextResponse.redirect(`${site}/?auth=invalid`)
 
-  if (!user.emailVerifiedAt) {
-    await db.user.update({where: {id: userId}, data: {emailVerifiedAt: new Date()}})
-    await db.investorProfile.updateMany({
-      where: {userId, verificationStatus: 'unverified'},
-      data: {verificationStatus: 'email_verified'},
-    })
+  if (!userRow.email_verified_at) {
+    unwrap<null>(
+      await supabase.from('users').update({email_verified_at: nowIso()}).eq('id', userId),
+      'user.markEmailVerified',
+    )
+    // Prisma updateMany -> PostgREST filtered update
+    unwrap<null>(
+      await supabase
+        .from('investor_profiles')
+        .update({verification_status: 'email_verified'})
+        .eq('user_id', userId)
+        .eq('verification_status', 'unverified'),
+      'investorProfile.markEmailVerified',
+    )
     await audit({actorId: userId, action: 'auth.email_verified', ...clientMeta(req)})
     await notify({
       userId,

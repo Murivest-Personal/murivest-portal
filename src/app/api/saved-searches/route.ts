@@ -1,17 +1,24 @@
 import {NextResponse, type NextRequest} from 'next/server'
-import {db} from '@/lib/db'
+import {supabase, unwrap, unwrapNullable, toCamel, toCamelList, nowIso, newId} from '@/lib/supabase'
 import {savedSearchSchema} from '@/lib/validation'
 import {requireApiUser, isResponse} from '@/lib/auth/context'
 import {parseBody, fail} from '@/lib/api'
+import type {SavedSearchRow} from '@/lib/db-types'
 
 /** GET — investor's saved searches & alert rules. */
 export async function GET() {
   const guard = await requireApiUser()
   if (isResponse(guard)) return guard.response
-  const searches = await db.savedSearch.findMany({
-    where: {userId: guard.ctx.user.id},
-    orderBy: {createdAt: 'desc'},
-  })
+  const searches = toCamelList(
+    unwrap<SavedSearchRow[]>(
+      await supabase
+        .from('saved_searches')
+        .select('*')
+        .eq('user_id', guard.ctx.user.id)
+        .order('created_at', {ascending: false}),
+      'savedSearches.list',
+    ),
+  )
   return NextResponse.json({ok: true, searches})
 }
 
@@ -21,14 +28,22 @@ export async function POST(req: NextRequest) {
   if (isResponse(guard)) return guard.response
   const parsed = await parseBody(req, savedSearchSchema)
   if ('response' in parsed) return parsed.response
-  const search = await db.savedSearch.create({
-    data: {
-      userId: guard.ctx.user.id,
-      name: parsed.data.name,
-      filters: parsed.data.filters as never,
-      alertOnNew: parsed.data.alertOnNew ?? false,
-    },
-  })
+  const searchRow = unwrap<SavedSearchRow>(
+    await supabase
+      .from('saved_searches')
+      .insert({
+        id: newId(),
+        user_id: guard.ctx.user.id,
+        name: parsed.data.name,
+        filters: parsed.data.filters,
+        alert_on_new: parsed.data.alertOnNew ?? false,
+        created_at: nowIso(),
+      })
+      .select('*')
+      .single(),
+    'savedSearches.create',
+  )
+  const search = toCamel(searchRow)
   return NextResponse.json({ok: true, search})
 }
 
@@ -38,9 +53,15 @@ export async function DELETE(req: NextRequest) {
   if (isResponse(guard)) return guard.response
   const id = req.nextUrl.searchParams.get('id')
   if (!id) return fail('Provide the search id.')
-  const existing = await db.savedSearch.findFirst({where: {id, userId: guard.ctx.user.id}})
+  const existing = unwrapNullable<SavedSearchRow>(
+    await supabase.from('saved_searches').select('id').eq('id', id).eq('user_id', guard.ctx.user.id).maybeSingle(),
+    'savedSearches.get',
+  )
   if (!existing) return fail('Saved search not found.', 404)
-  await db.savedSearch.delete({where: {id}})
+  unwrap(
+    await supabase.from('saved_searches').delete().eq('id', id),
+    'savedSearches.delete',
+  )
   return NextResponse.json({ok: true})
 }
 

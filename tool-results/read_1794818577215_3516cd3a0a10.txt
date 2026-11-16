@@ -1,0 +1,1377 @@
+     1→import {cache} from 'react'
+     2→import {supabase, unwrap, unwrapNullable, unwrapCount, toCamel, toCamelList, auditTable} from '@/lib/supabase'
+     3→import {sanityClient} from '@/lib/sanity/client'
+     4→import type {OpportunityDoc, MarketReportDoc, AccessTier} from '@/lib/sanity/types'
+     5→import type {AdminContext} from './rbac'
+     6→import {investorScopeWhere} from './rbac'
+     7→import {revenueCardMetrics} from './revenue'
+     8→import type {Period} from './period'
+     9→import type {
+    10→  AuditLogRow,
+    11→  ComplianceReviewRow,
+    12→  ContentMetaRow,
+    13→  DocumentAccessLogRow,
+    14→  DocumentGrantRow,
+    15→  DocumentRequestRow,
+    16→  EnquiryRow,
+    17→  InternalNoteRow,
+    18→  InvestorCriteriaRow,
+    19→  InvestorProfileRow,
+    20→  MandateRow,
+    21→  MandateMilestoneRow,
+    22→  MessageRow,
+    23→  NdaAgreementRow,
+    24→  OpportunityViewRow,
+    25→  OrderRow,
+    26→  OrderStatusEventRow,
+    27→  OrganisationMemberRow,
+    28→  OrganisationRow,
+    29→  PaymentRow,
+    30→  RefundAdjustmentRow,
+    31→  RevenueEventRow,
+    32→  SavedOpportunityRow,
+    33→  SecurityEventRow,
+    34→  SessionRow,
+    35→  StaffProfileRow,
+    36→  SystemSettingRow,
+    37→  UserRow,
+    38→} from '@/lib/db-types'
+    39→
+    40→/**
+    41→ * Admin read-model — one function per module screen. Advisor scoping is
+    42→ * applied inside every query: advisors only ever receive rows belonging to
+    43→ * investors assigned to them.
+    44→ */
+    45→
+    46→// ---------------------------------------------------------------------------
+    47→// Sanity admin reads (all tiers — staff perspective)
+    48→// ---------------------------------------------------------------------------
+    49→
+    50→const ADMIN_OPP_PROJECTION = `{
+    51→  _id, title, "slug": slug.current, status, accessTier, assetClass, geography,
+    52→  dealStructure, indicativePrice, investmentSizeMin, investmentSizeMax,
+    53→  financials, summary, auctionUrl, featured, publishDate
+    54→}`
+    55→
+    56→export const getAdminOpportunities = cache(async (): Promise<OpportunityDoc[]> => {
+    57→  const client = sanityClient()
+    58→  if (!client) return []
+    59→  return client.fetch(
+    60→    `*[_type == "opportunity" && defined(published) && published == true] | order(publishDate desc, title asc) ${ADMIN_OPP_PROJECTION}`,
+    61→  )
+    62→})
+    63→
+    64→export const getAdminReports = cache(async (): Promise<MarketReportDoc[]> => {
+    65→  const client = sanityClient()
+    66→  if (!client) return []
+    67→  return client.fetch(
+    68→    `*[_type == "marketReport" && defined(published) && published == true] | order(publishDate desc) {_id, title, "slug": slug.current, category, geography, accessTier, summary, publishDate}`,
+    69→  )
+    70→})
+    71→
+    72→export function sanityStudioUrl(): string {
+    73→  return process.env.SANITY_STUDIO_URL || 'https://murivest.sanity.studio'
+    74→}
+    75→
+    76→// ---------------------------------------------------------------------------
+    77→// Investors
+    78→// ---------------------------------------------------------------------------
+    79→
+    80→export interface InvestorListRow {
+    81→  userId: string
+    82→  email: string
+    83→  fullName: string | null
+    84→  status: string
+    85→  classification: string
+    86→  verificationStatus: string
+    87→  kycStatus: string
+    88→  amlStatus: string
+    89→  accessTier: string
+    90→  ndaAccepted: boolean
+    91→  advisorId: string | null
+    92→  source: string | null
+    93→  countryResidence: string | null
+    94→  organisationId: string | null
+    95→  organisationName: string | null
+    96→  equityAvailable: number | null
+    97→  totalCapacity: number | null
+    98→  capitalFloor: number | null
+    99→  capitalCeiling: number | null
+   100→  capitalCurrency: string
+   101→  createdAt: Date
+   102→  lastLoginAt: Date | null
+   103→  orderCount: number
+   104→  revenueUsd: number
+   105→  activeMandates: number
+   106→}
+   107→
+   108→export async function investorList(
+   109→  actx: AdminContext,
+   110→  opts: {search?: string; tier?: string; verification?: string; classification?: string; dormant?: boolean; limit?: number} = {},
+   111→): Promise<InvestorListRow[]> {
+   112→  const scope = investorScopeWhere(actx)
+   113→  const search = opts.search?.trim().toLowerCase() || null
+   114→
+   115→  let profileQuery = supabase.from('investor_profiles').select('*')
+   116→  if (scope) profileQuery = profileQuery.eq('advisor_id', scope.advisorId)
+   117→  if (opts.tier) profileQuery = profileQuery.eq('access_tier', opts.tier)
+   118→  if (opts.verification) profileQuery = profileQuery.eq('verification_status', opts.verification)
+   119→  if (opts.classification) profileQuery = profileQuery.eq('classification', opts.classification)
+   120→  const profileRows = unwrap<InvestorProfileRow[]>(
+   121→    await profileQuery.order('created_at', {ascending: false}).limit(opts.limit ?? 500),
+   122→    'profiles.list',
+   123→  )
+   124→
+   125→  // relation include → separate query + JS join
+   126→  const profileUserIds = profileRows.map((p) => p.user_id)
+   127→  const userRows = profileUserIds.length
+   128→    ? unwrap<UserRow[]>(await supabase.from('users').select('*').in('id', profileUserIds), 'users.list')
+   129→    : []
+   130→  const userBy = new Map(userRows.map((u) => [u.id, u]))
+   131→
+   132→  let rows = profileRows.filter((p) => {
+   133→    if (!search) return true
+   134→    const u = userBy.get(p.user_id)
+   135→    return (
+   136→      (u?.email ?? '').toLowerCase().includes(search) ||
+   137→      (u?.full_name ?? '').toLowerCase().includes(search) ||
+   138→      (p.country_residence ?? '').toLowerCase().includes(search)
+   139→    )
+   140→  })
+   141→
+   142→  if (opts.dormant) {
+   143→    const cutoff = Date.now() - 60 * 86400000
+   144→    rows = rows.filter((p) => {
+   145→      const lastLogin = userBy.get(p.user_id)?.last_login_at
+   146→      return !lastLogin || new Date(lastLogin).getTime() < cutoff
+   147→    })
+   148→  }
+   149→
+   150→  const userIds = rows.map((r) => r.user_id)
+   151→  const [orderRows, revenueEventRows, mandateRows, orgRows] = await Promise.all([
+   152→    userIds.length ? unwrap<OrderRow[]>(await supabase.from('orders').select('*').in('user_id', userIds), 'orders.list') : [],
+   153→    userIds.length ? unwrap<RevenueEventRow[]>(await supabase.from('revenue_events').select('*'), 'revenue.list') : [],
+   154→    userIds.length ? unwrap<MandateRow[]>(await supabase.from('mandates').select('*').in('user_id', userIds).eq('status', 'active'), 'mandates.list') : [],
+   155→    unwrap<OrganisationRow[]>(await supabase.from('organisations').select('*'), 'organisations.list'),
+   156→  ])
+   157→  // revenue-event → order join: separate query + JS map
+   158→  const revenueOrderRows = revenueEventRows.length
+   159→    ? unwrap<OrderRow[]>(
+   160→        await supabase.from('orders').select('*').in('id', [...new Set(revenueEventRows.map((e) => e.order_id))]),
+   161→        'orders.list',
+   162→      )
+   163→    : []
+   164→  const revenueOrderUser = new Map(revenueOrderRows.map((o) => [o.id, o.user_id]))
+   165→
+   166→  const orderCount = new Map<string, number>()
+   167→  for (const o of orderRows) orderCount.set(o.user_id, (orderCount.get(o.user_id) ?? 0) + 1)
+   168→  const revenueBy = new Map<string, number>()
+   169→  for (const e of revenueEventRows) {
+   170→    const uid = revenueOrderUser.get(e.order_id)
+   171→    if (!uid) continue
+   172→    revenueBy.set(uid, (revenueBy.get(uid) ?? 0) + e.gross_usd)
+   173→  }
+   174→  const mandateCount = new Map<string, number>()
+   175→  for (const m of mandateRows) mandateCount.set(m.user_id, (mandateCount.get(m.user_id) ?? 0) + 1)
+   176→  const orgNames = new Map(orgRows.map((o) => [o.id, o.name]))
+   177→
+   178→  return rows.map((p) => {
+   179→    const u = userBy.get(p.user_id)
+   180→    return {
+   181→      userId: p.user_id,
+   182→      email: u?.email ?? '',
+   183→      fullName: u?.full_name ?? null,
+   184→      status: u?.status ?? '',
+   185→      classification: p.classification,
+   186→      verificationStatus: p.verification_status,
+   187→      kycStatus: p.kyc_status,
+   188→      amlStatus: p.aml_status,
+   189→      accessTier: p.access_tier,
+   190→      ndaAccepted: p.nda_accepted,
+   191→      advisorId: p.advisor_id,
+   192→      source: p.source,
+   193→      countryResidence: p.country_residence,
+   194→      organisationId: p.organisation_id,
+   195→      organisationName: p.organisation_id ? orgNames.get(p.organisation_id) ?? null : null,
+   196→      equityAvailable: p.equity_available,
+   197→      totalCapacity: p.total_capacity,
+   198→      capitalFloor: p.capital_floor,
+   199→      capitalCeiling: p.capital_ceiling,
+   200→      capitalCurrency: p.capital_currency,
+   201→      createdAt: new Date(u?.created_at ?? Date.now()),
+   202→      lastLoginAt: u?.last_login_at ? new Date(u.last_login_at) : null,
+   203→      orderCount: orderCount.get(p.user_id) ?? 0,
+   204→      revenueUsd: Math.round((revenueBy.get(p.user_id) ?? 0) * 100) / 100,
+   205→      activeMandates: mandateCount.get(p.user_id) ?? 0,
+   206→    }
+   207→  })
+   208→}
+   209→
+   210→/** Organisation + members + member users (separate queries + JS join). */
+   211→async function organisationWithMembers(organisationId: string) {
+   212→  const orgRow = unwrapNullable<OrganisationRow>(
+   213→    await supabase.from('organisations').select('*').eq('id', organisationId).maybeSingle(),
+   214→    'organisations.get',
+   215→  )
+   216→  if (!orgRow) return null
+   217→  const memberRows = unwrap<OrganisationMemberRow[]>(
+   218→    await supabase.from('organisation_members').select('*').eq('organisation_id', organisationId),
+   219→    'organisationMembers.list',
+   220→  )
+   221→  const memberUserIds = memberRows.map((m) => m.user_id)
+   222→  const memberUserRows = memberUserIds.length
+   223→    ? unwrap<UserRow[]>(await supabase.from('users').select('*').in('id', memberUserIds), 'users.list')
+   224→    : []
+   225→  const memberUserBy = new Map(memberUserRows.map((u) => [u.id, u]))
+   226→  return {
+   227→    ...toCamel(orgRow),
+   228→    members: memberRows.map((m) => {
+   229→      const u = memberUserBy.get(m.user_id)
+   230→      return {
+   231→        ...toCamel(m),
+   232→        user: u ? {id: u.id, fullName: u.full_name, email: u.email} : {id: m.user_id, fullName: null, email: ''},
+   233→      }
+   234→    }),
+   235→  }
+   236→}
+   237→
+   238→export async function investorDetail(actx: AdminContext, userId: string) {
+   239→  const scope = investorScopeWhere(actx)
+   240→  const profileRow = unwrapNullable<InvestorProfileRow>(
+   241→    await supabase.from('investor_profiles').select('*').eq('user_id', userId).maybeSingle(),
+   242→    'profiles.byUser',
+   243→  )
+   244→  if (!profileRow) return null
+   245→  if (scope && profileRow.advisor_id !== actx.auth.user.id) return null
+   246→  const profile = toCamel(profileRow)
+   247→
+   248→  const [org, orderRows, mandateRows, grantRows, sessionRows, secEventRows, noteRows, reviewRows, criteriaRow, savedCount, scenarioCount, enquiriesCount, auditRows, advisorRow, userRow] = await Promise.all([
+   249→    profile.organisationId ? organisationWithMembers(profile.organisationId) : null,
+   250→    unwrap<OrderRow[]>(await supabase.from('orders').select('*').eq('user_id', userId).order('created_at', {ascending: false}), 'orders.list'),
+   251→    unwrap<MandateRow[]>(await supabase.from('mandates').select('*').eq('user_id', userId).order('created_at', {ascending: false}), 'mandates.list'),
+   252→    unwrap<DocumentGrantRow[]>(await supabase.from('document_grants').select('*').eq('user_id', userId).order('created_at', {ascending: false}), 'documentGrants.list'),
+   253→    unwrap<SessionRow[]>(await supabase.from('sessions').select('*').eq('user_id', userId).order('last_seen_at', {ascending: false}).limit(6), 'sessions.list'),
+   254→    unwrap<SecurityEventRow[]>(await supabase.from('security_events').select('*').eq('user_id', userId).order('created_at', {ascending: false}).limit(12), 'securityEvents.list'),
+   255→    unwrap<InternalNoteRow[]>(await supabase.from('internal_notes').select('*').eq('entity_type', 'investor').eq('entity_id', userId).order('created_at', {ascending: false}), 'internalNotes.list'),
+   256→    unwrap<ComplianceReviewRow[]>(await supabase.from('compliance_reviews').select('*').eq('subject_user_id', userId).order('created_at', {ascending: false}).limit(20), 'complianceReviews.list'),
+   257→    unwrapNullable<InvestorCriteriaRow>(await supabase.from('investor_criteria').select('*').eq('user_id', userId).maybeSingle(), 'criteria.byUser'),
+   258→    unwrapCount(await supabase.from('saved_opportunities').select('*', {count: 'exact', head: true}).eq('user_id', userId), 'savedOpportunities.count'),
+   259→    unwrapCount(await supabase.from('scenarios').select('*', {count: 'exact', head: true}).eq('user_id', userId), 'scenarios.count'),
+   260→    unwrapCount(await supabase.from('enquiries').select('*', {count: 'exact', head: true}).eq('user_id', userId), 'enquiries.count'),
+   261→    unwrap<AuditLogRow[]>(
+   262→      await auditTable()
+   263→        .select('*')
+   264→        .or(`actor_id.eq."${userId}",(entity.eq."profile",entity_id.eq."${profile.id}")`)
+   265→        .order('created_at', {ascending: false})
+   266→        .limit(40),
+   267→      'audit.investorTrail',
+   268→    ),
+   269→    profile.advisorId
+   270→      ? unwrapNullable<UserRow>(await supabase.from('users').select('*').eq('id', profile.advisorId).maybeSingle(), 'users.get')
+   271→      : null,
+   272→    unwrapNullable<UserRow>(await supabase.from('users').select('*').eq('id', userId).maybeSingle(), 'users.get'),
+   273→  ])
+   274→
+   275→  const staffIds = [...new Set([...noteRows.map((n) => n.author_id), ...reviewRows.map((r) => r.reviewer_id)].filter((x): x is string => !!x))]
+   276→  const staffRows = staffIds.length ? unwrap<UserRow[]>(await supabase.from('users').select('*').in('id', staffIds), 'users.list') : []
+   277→  const staffNames = new Map(staffRows.map((s) => [s.id, s.full_name || s.email]))
+   278→
+   279→  return {
+   280→    profile,
+   281→    user: userRow
+   282→      ? {
+   283→          id: userRow.id,
+   284→          email: userRow.email,
+   285→          fullName: userRow.full_name,
+   286→          status: userRow.status,
+   287→          lastLoginAt: userRow.last_login_at,
+   288→          createdAt: userRow.created_at,
+   289→          emailVerifiedAt: userRow.email_verified_at,
+   290→          mfaEnabled: userRow.mfa_enabled,
+   291→          failedLogins: userRow.failed_logins,
+   292→          lockedUntil: userRow.locked_until,
+   293→        }
+   294→      : null,
+   295→    organisation: org,
+   296→    advisor: advisorRow ? {id: advisorRow.id, fullName: advisorRow.full_name, email: advisorRow.email} : null,
+   297→    orders: orderRows.map((o) => ({
+   298→      id: o.id,
+   299→      reference: o.reference,
+   300→      briefTitle: o.brief_title,
+   301→      briefType: o.brief_type,
+   302→      status: o.status,
+   303→      amountUsd: o.amount_usd,
+   304→      currency: o.currency,
+   305→      createdAt: o.created_at,
+   306→      deliveredAt: o.delivered_at,
+   307→    })),
+   308→    mandates: mandateRows.map((m) => ({
+   309→      id: m.id,
+   310→      reference: m.reference,
+   311→      title: m.title,
+   312→      status: m.status,
+   313→      stage: m.stage,
+   314→      probability: m.probability,
+   315→      targetAllocationMin: m.target_allocation_min,
+   316→      targetAllocationMax: m.target_allocation_max,
+   317→      currency: m.currency,
+   318→      createdAt: m.created_at,
+   319→    })),
+   320→    grants: grantRows.map((g) => ({
+   321→      id: g.id,
+   322→      sanityDocumentId: g.sanity_document_id,
+   323→      permission: g.permission,
+   324→      expiresAt: g.expires_at,
+   325→      createdAt: g.created_at,
+   326→    })),
+   327→    sessions: sessionRows.map((s) => ({
+   328→      id: s.id,
+   329→      device: s.device,
+   330→      ip: s.ip,
+   331→      userAgent: s.user_agent,
+   332→      createdAt: s.created_at,
+   333→      lastSeenAt: s.last_seen_at,
+   334→      expiresAt: s.expires_at,
+   335→      revokedAt: s.revoked_at,
+   336→    })),
+   337→    securityEvents: secEventRows.map((e) => ({id: e.id, type: e.type, ip: e.ip, createdAt: e.created_at})),
+   338→    notes: noteRows.map((n) => ({
+   339→      id: n.id,
+   340→      authorId: n.author_id,
+   341→      body: n.body,
+   342→      visibility: n.visibility,
+   343→      createdAt: n.created_at,
+   344→      authorName: staffNames.get(n.author_id) ?? 'Staff',
+   345→    })),
+   346→    reviews: reviewRows.map((r) => ({
+   347→      id: r.id,
+   348→      reviewerId: r.reviewer_id,
+   349→      decision: r.decision,
+   350→      notes: r.notes,
+   351→      riskFlags: r.risk_flags,
+   352→      detail: r.detail,
+   353→      createdAt: r.created_at,
+   354→      reviewerName: staffNames.get(r.reviewer_id) ?? 'Staff',
+   355→    })),
+   356→    criteria: criteriaRow ? toCamel(criteriaRow) : null,
+   357→    stats: {savedCount, scenarioCount, enquiriesCount},
+   358→    auditTrail: auditRows.map((l) => ({
+   359→      id: l.id,
+   360→      action: l.action,
+   361→      entity: l.entity,
+   362→      entityId: l.entity_id,
+   363→      actorType: l.actor_type,
+   364→      detail: l.detail,
+   365→      ip: l.ip,
+   366→      createdAt: l.created_at,
+   367→    })),
+   368→  }
+   369→}
+   370→
+   371→// ---------------------------------------------------------------------------
+   372→// Organisations
+   373→// ---------------------------------------------------------------------------
+   374→
+   375→export async function organisationList() {
+   376→  const orgRows = unwrap<OrganisationRow[]>(
+   377→    await supabase.from('organisations').select('*').order('created_at', {ascending: false}),
+   378→    'organisations.list',
+   379→  )
+   380→  // nested relation include (members + users) → separate queries + JS join
+   381→  const orgIds = orgRows.map((o) => o.id)
+   382→  const memberRows = orgIds.length
+   383→    ? unwrap<OrganisationMemberRow[]>(
+   384→        await supabase.from('organisation_members').select('*').in('organisation_id', orgIds),
+   385→        'organisationMembers.list',
+   386→      )
+   387→    : []
+   388→  const memberUserIds = [...new Set(memberRows.map((m) => m.user_id))]
+   389→  const memberUserRows = memberUserIds.length
+   390→    ? unwrap<UserRow[]>(await supabase.from('users').select('*').in('id', memberUserIds), 'users.list')
+   391→    : []
+   392→  const memberUserBy = new Map(memberUserRows.map((u) => [u.id, u]))
+   393→  const membersByOrg = new Map<string, OrganisationMemberRow[]>()
+   394→  for (const m of memberRows) {
+   395→    const arr = membersByOrg.get(m.organisation_id) ?? []
+   396→    arr.push(m)
+   397→    membersByOrg.set(m.organisation_id, arr)
+   398→  }
+   399→  return orgRows.map((o) => ({
+   400→    id: o.id,
+   401→    name: o.name,
+   402→    legalName: o.legal_name,
+   403→    type: o.type,
+   404→    country: o.country,
+   405→    website: o.website,
+   406→    verified: o.verified,
+   407→    createdAt: o.created_at,
+   408→    members: (membersByOrg.get(o.id) ?? []).map((m) => {
+   409→      const u = memberUserBy.get(m.user_id)
+   410→      return {
+   411→        id: m.id,
+   412→        userId: m.user_id,
+   413→        name: u?.full_name || u?.email || m.user_id,
+   414→        email: u?.email ?? '',
+   415→        role: m.role,
+   416→        title: m.title,
+   417→        status: m.status,
+   418→        lastLoginAt: u?.last_login_at ?? null,
+   419→      }
+   420→    }),
+   421→  }))
+   422→}
+   423→
+   424→// ---------------------------------------------------------------------------
+   425→// Orders (Orders Engine)
+   426→// ---------------------------------------------------------------------------
+   427→
+   428→const OPEN_STATUSES = ['pending', 'awaiting_payment', 'payment_confirmed', 'processing', 'internal_review', 'ready']
+   429→
+   430→function paymentView(p: PaymentRow) {
+   431→  return {
+   432→    id: p.id,
+   433→    status: p.status,
+   434→    method: p.method,
+   435→    amountUsd: p.amount_usd,
+   436→    amountKes: p.amount_kes,
+   437→    reference: p.reference,
+   438→    createdAt: p.created_at,
+   439→    verifiedAt: p.verified_at,
+   440→  }
+   441→}
+   442→
+   443→export async function orderList(
+   444→  actx: AdminContext,
+   445→  opts: {status?: string; search?: string; priority?: string; assignedTo?: string; limit?: number} = {},
+   446→) {
+   447→  const assignedUserIds = actx.advisorId
+   448→    ? unwrap<InvestorProfileRow[]>(
+   449→        await supabase.from('investor_profiles').select('*').eq('advisor_id', actx.auth.user.id),
+   450→        'profiles.list',
+   451→      ).map((p) => p.user_id)
+   452→    : null
+   453→
+   454→  let orderQuery = supabase.from('orders').select('*')
+   455→  if (opts.status === 'open') orderQuery = orderQuery.in('status', OPEN_STATUSES)
+   456→  else if (opts.status) orderQuery = orderQuery.eq('status', opts.status)
+   457→  if (opts.priority) orderQuery = orderQuery.eq('priority', opts.priority)
+   458→  if (opts.assignedTo === 'me') orderQuery = orderQuery.eq('assigned_to_id', actx.auth.user.id)
+   459→  else if (opts.assignedTo === 'unassigned') orderQuery = orderQuery.is('assigned_to_id', null)
+   460→  if (assignedUserIds) orderQuery = orderQuery.in('user_id', assignedUserIds)
+   461→  const orderRows = unwrap<OrderRow[]>(
+   462→    await orderQuery.order('created_at', {ascending: false}).limit(opts.limit ?? 400),
+   463→    'orders.list',
+   464→  )
+   465→
+   466→  const search = opts.search?.trim().toLowerCase()
+   467→  let orders = orderRows.filter((o) => {
+   468→    if (!search) return true
+   469→    return (
+   470→      o.reference.toLowerCase().includes(search) ||
+   471→      (o.brief_title ?? '').toLowerCase().includes(search) ||
+   472→      (o.contact_email ?? '').toLowerCase().includes(search) ||
+   473→      (o.contact_name ?? '').toLowerCase().includes(search)
+   474→    )
+   475→  })
+   476→
+   477→  // relation include (payments) → separate query + JS join
+   478→  const orderIds = orders.map((o) => o.id)
+   479→  const paymentRows = orderIds.length
+   480→    ? unwrap<PaymentRow[]>(
+   481→        await supabase.from('payments').select('*').in('order_id', orderIds).order('created_at', {ascending: true}),
+   482→        'payments.list',
+   483→      )
+   484→    : []
+   485→  const paymentsBy = new Map<string, PaymentRow[]>()
+   486→  for (const p of paymentRows) {
+   487→    const arr = paymentsBy.get(p.order_id) ?? []
+   488→    arr.push(p)
+   489→    paymentsBy.set(p.order_id, arr)
+   490→  }
+   491→
+   492→  const userIds = [...new Set(orders.map((o) => o.user_id))]
+   493→  const profileRows = userIds.length
+   494→    ? unwrap<InvestorProfileRow[]>(await supabase.from('investor_profiles').select('*').in('user_id', userIds), 'profiles.list')
+   495→    : []
+   496→  const userRows = userIds.length ? unwrap<UserRow[]>(await supabase.from('users').select('*').in('id', userIds), 'users.list') : []
+   497→  const orgIds = [...new Set(profileRows.map((p) => p.organisation_id).filter((x): x is string => !!x))]
+   498→  const orgRows = orgIds.length ? unwrap<OrganisationRow[]>(await supabase.from('organisations').select('*').in('id', orgIds), 'organisations.list') : []
+   499→  const profileBy = new Map(profileRows.map((p) => [p.user_id, p]))
+   500→  const userBy = new Map(userRows.map((u) => [u.id, u]))
+   501→  const orgBy = new Map(orgRows.map((o) => [o.id, o.name]))
+   502→
+   503→  return orders.map((o) => {
+   504→    const profile = profileBy.get(o.user_id)
+   505→    const orderPayments = paymentsBy.get(o.id) ?? []
+   506→    return {
+   507→      id: o.id,
+   508→      reference: o.reference,
+   509→      userId: o.user_id,
+   510→      investorName: userBy.get(o.user_id)?.full_name || userBy.get(o.user_id)?.email || o.user_id,
+   511→      investorEmail: userBy.get(o.user_id)?.email ?? '',
+   512→      investorClass: profile?.classification ?? 'individual',
+   513→      investorTier: profile?.access_tier ?? 'tier_1',
+   514→      organisationName: profile?.organisation_id ? orgBy.get(profile.organisation_id) ?? null : null,
+   515→      briefTitle: o.brief_title,
+   516→      briefType: o.brief_type,
+   517→      briefSource: o.brief_source,
+   518→      format: o.format,
+   519→      customScope: o.custom_scope,
+   520→      status: o.status,
+   521→      priority: o.priority,
+   522→      assignedToId: o.assigned_to_id,
+   523→      advisorId: o.advisor_id ?? profile?.advisor_id ?? null,
+   524→      amountUsd: o.amount_usd,
+   525→      amountKes: o.amount_kes,
+   526→      currency: o.currency,
+   527→      createdAt: o.created_at,
+   528→      dueAt: o.due_at,
+   529→      deliveredAt: o.delivered_at,
+   530→      closedAt: o.closed_at,
+   531→      payment: orderPayments[0] ? paymentView(orderPayments[0]) : null,
+   532→      hasVerifiedPayment: orderPayments.some((p) => p.status === 'verified'),
+   533→    }
+   534→  })
+   535→}
+   536→
+   537→export async function orderDetail(actx: AdminContext, orderId: string) {
+   538→  const orderRow = unwrapNullable<OrderRow>(
+   539→    await supabase.from('orders').select('*').eq('id', orderId).maybeSingle(),
+   540→    'orders.get',
+   541→  )
+   542→  if (!orderRow) return null
+   543→  const order = toCamel(orderRow)
+   544→  // relation include (payments) → separate query + JS join
+   545→  const paymentRows = unwrap<PaymentRow[]>(
+   546→    await supabase.from('payments').select('*').eq('order_id', orderId).order('created_at', {ascending: true}),
+   547→    'payments.list',
+   548→  )
+   549→  const payments = toCamelList(paymentRows)
+   550→
+   551→  const [profileRow, userRow, eventRows, noteRows, refundRows, revenueRow] = await Promise.all([
+   552→    unwrapNullable<InvestorProfileRow>(
+   553→      await supabase.from('investor_profiles').select('*').eq('user_id', orderRow.user_id).maybeSingle(),
+   554→      'profiles.byUser',
+   555→    ),
+   556→    unwrapNullable<UserRow>(await supabase.from('users').select('*').eq('id', orderRow.user_id).maybeSingle(), 'users.get'),
+   557→    unwrap<OrderStatusEventRow[]>(
+   558→      await supabase.from('order_status_events').select('*').eq('order_id', orderId).order('created_at', {ascending: true}),
+   559→      'orderStatusEvents.list',
+   560→    ),
+   561→    unwrap<InternalNoteRow[]>(
+   562→      await supabase.from('internal_notes').select('*').eq('entity_type', 'order').eq('entity_id', orderId).order('created_at', {ascending: false}),
+   563→      'internalNotes.list',
+   564→    ),
+   565→    unwrap<RefundAdjustmentRow[]>(
+   566→      await supabase.from('refund_adjustments').select('*').eq('order_id', orderId).order('created_at', {ascending: false}),
+   567→      'refundAdjustments.list',
+   568→    ),
+   569→    unwrapNullable<RevenueEventRow>(
+   570→      await supabase.from('revenue_events').select('*').eq('order_id', orderId).maybeSingle(),
+   571→      'revenue.byOrder',
+   572→    ),
+   573→  ])
+   574→  const profile = profileRow ? toCamel(profileRow) : null
+   575→
+   576→  if (actx.advisorId && profile?.advisorId !== actx.auth.user.id) return null
+   577→
+   578→  const staffIds = [
+   579→    ...new Set(
+   580→      [
+   581→        ...eventRows.map((e) => e.changed_by_id),
+   582→        ...noteRows.map((n) => n.author_id),
+   583→        ...refundRows.map((r) => r.requested_by_id),
+   584→        ...refundRows.map((r) => r.reviewed_by_id ?? null),
+   585→        orderRow.assigned_to_id,
+   586→        orderRow.advisor_id,
+   587→        profileRow?.advisor_id ?? null,
+   588→      ].filter((x): x is string => !!x),
+   589→    ),
+   590→  ]
+   591→  const staffRows = staffIds.length ? unwrap<UserRow[]>(await supabase.from('users').select('*').in('id', staffIds), 'users.list') : []
+   592→  const staffNames = new Map(staffRows.map((s) => [s.id, s.full_name || s.email]))
+   593→
+   594→  return {
+   595→    order,
+   596→    investor: {
+   597→      user: userRow ? {id: userRow.id, fullName: userRow.full_name, email: userRow.email, status: userRow.status} : null,
+   598→      profile,
+   599→    },
+   600→    payments,
+   601→    events: eventRows.map((e) => ({
+   602→      ...toCamel(e),
+   603→      changedByName: e.changed_by_id ? staffNames.get(e.changed_by_id) ?? 'Staff' : 'System',
+   604→    })),
+   605→    notes: noteRows.map((n) => ({
+   606→      ...toCamel(n),
+   607→      authorName: staffNames.get(n.author_id) ?? 'Staff',
+   608→    })),
+   609→    refunds: refundRows.map((r) => ({
+   610→      ...toCamel(r),
+   611→      requestedByName: staffNames.get(r.requested_by_id) ?? 'Staff',
+   612→      reviewedByName: r.reviewed_by_id ? staffNames.get(r.reviewed_by_id) ?? 'Staff' : null,
+   613→    })),
+   614→    revenue: revenueRow ? toCamel(revenueRow) : null,
+   615→    assignment: {
+   616→      assignedToName: orderRow.assigned_to_id ? staffNames.get(orderRow.assigned_to_id) ?? null : null,
+   617→      advisorName: (orderRow.advisor_id ?? profileRow?.advisor_id ?? null)
+   618→        ? staffNames.get(orderRow.advisor_id ?? profileRow!.advisor_id!) ?? null
+   619→        : null,
+   620→    },
+   621→  }
+   622→}
+   623→
+   624→// ---------------------------------------------------------------------------
+   625→// Mandates & pipeline
+   626→// ---------------------------------------------------------------------------
+   627→
+   628→/**
+   629→ * Advisor scope — OR(userId IN assigned, advisorId = actor) → two queries
+   630→ * merged + deduped + re-sorted in JS (no multi-table tx over PostgREST).
+   631→ */
+   632→async function mandatesByAdvisorScope(
+   633→  advisorUserId: string,
+   634→  assignedUserIds: string[],
+   635→  opts: {status?: string; stage?: string; ascending: boolean; limit: number},
+   636→): Promise<MandateRow[]> {
+   637→  const mkQuery = () => {
+   638→    let q = supabase.from('mandates').select('*')
+   639→    if (opts.status) q = q.eq('status', opts.status)
+   640→    if (opts.stage) q = q.eq('stage', opts.stage)
+   641→    return q
+   642→  }
+   643→  const [byUsers, byAdvisor] = await Promise.all([
+   644→    unwrap<MandateRow[]>(
+   645→      await mkQuery().in('user_id', assignedUserIds).order('updated_at', {ascending: opts.ascending}).limit(opts.limit),
+   646→      'mandates.list',
+   647→    ),
+   648→    unwrap<MandateRow[]>(
+   649→      await mkQuery().eq('advisor_id', advisorUserId).order('updated_at', {ascending: opts.ascending}).limit(opts.limit),
+   650→      'mandates.list',
+   651→    ),
+   652→  ])
+   653→  const merged: MandateRow[] = []
+   654→  const seen = new Set<string>()
+   655→  for (const m of [...byUsers, ...byAdvisor]) {
+   656→    if (seen.has(m.id)) continue
+   657→    seen.add(m.id)
+   658→    merged.push(m)
+   659→  }
+   660→  merged.sort((a, b) => {
+   661→    if (a.updated_at === b.updated_at) return 0
+   662→    return (a.updated_at < b.updated_at) === opts.ascending ? -1 : 1
+   663→  })
+   664→  return merged.slice(0, opts.limit)
+   665→}
+   666→
+   667→export async function mandateList(
+   668→  actx: AdminContext,
+   669→  opts: {status?: string; stage?: string; search?: string; limit?: number} = {},
+   670→) {
+   671→  const assignedUserIds = actx.advisorId
+   672→    ? unwrap<InvestorProfileRow[]>(
+   673→        await supabase.from('investor_profiles').select('*').eq('advisor_id', actx.auth.user.id),
+   674→        'profiles.list',
+   675→      ).map((p) => p.user_id)
+   676→    : null
+   677→
+   678→  let mandateRows: MandateRow[]
+   679→  if (assignedUserIds) {
+   680→    mandateRows = await mandatesByAdvisorScope(actx.auth.user.id, assignedUserIds, {
+   681→      status: opts.status,
+   682→      stage: opts.stage,
+   683→      ascending: false,
+   684→      limit: opts.limit ?? 300,
+   685→    })
+   686→  } else {
+   687→    let mandateQuery = supabase.from('mandates').select('*')
+   688→    if (opts.status) mandateQuery = mandateQuery.eq('status', opts.status)
+   689→    if (opts.stage) mandateQuery = mandateQuery.eq('stage', opts.stage)
+   690→    mandateRows = unwrap<MandateRow[]>(
+   691→      await mandateQuery.order('updated_at', {ascending: false}).limit(opts.limit ?? 300),
+   692→      'mandates.list',
+   693→    )
+   694→  }
+   695→  let mandates = toCamelList(mandateRows)
+   696→
+   697→  const search = opts.search?.trim().toLowerCase()
+   698→  if (search) mandates = mandates.filter((m) => m.reference.toLowerCase().includes(search) || m.title.toLowerCase().includes(search))
+   699→
+   700→  // relation include (milestones) → separate query + JS join
+   701→  const mandateIds = mandates.map((m) => m.id)
+   702→  const milestoneRows = mandateIds.length
+   703→    ? unwrap<MandateMilestoneRow[]>(
+   704→        await supabase.from('mandate_milestones').select('*').in('mandate_id', mandateIds).order('created_at', {ascending: true}),
+   705→        'mandateMilestones.list',
+   706→      )
+   707→    : []
+   708→  const milestonesBy = new Map<string, MandateMilestoneRow[]>()
+   709→  for (const ms of milestoneRows) {
+   710→    const arr = milestonesBy.get(ms.mandate_id) ?? []
+   711→    arr.push(ms)
+   712→    milestonesBy.set(ms.mandate_id, arr)
+   713→  }
+   714→
+   715→  const userIds = [...new Set(mandates.map((m) => m.userId))]
+   716→  const userRows = userIds.length ? unwrap<UserRow[]>(await supabase.from('users').select('*').in('id', userIds), 'users.list') : []
+   717→  const userBy = new Map(userRows.map((u) => [u.id, u]))
+   718→  const advisorRows = unwrap<UserRow[]>(await supabase.from('users').select('*').in('role', ['advisor', 'admin']), 'users.list')
+   719→  const advisorNames = new Map(advisorRows.map((a) => [a.id, a.full_name || a.email]))
+   720→
+   721→  return mandates.map((m) => ({
+   722→    id: m.id,
+   723→    reference: m.reference,
+   724→    title: m.title,
+   725→    status: m.status,
+   726→    stage: m.stage,
+   727→    probability: m.probability,
+   728→    nextAction: m.nextAction,
+   729→    nextActionDue: m.nextActionDue,
+   730→    targetAllocationMin: m.targetAllocationMin,
+   731→    targetAllocationMax: m.targetAllocationMax,
+   732→    currency: m.currency,
+   733→    geographies: m.geographies,
+   734→    assetClasses: m.assetClasses,
+   735→    minNetYield: m.minNetYield,
+   736→    targetIrr: m.targetIrr,
+   737→    investorName: userBy.get(m.userId)?.full_name || userBy.get(m.userId)?.email || m.userId,
+   738→    investorEmail: userBy.get(m.userId)?.email ?? '',
+   739→    advisorId: m.advisorId,
+   740→    advisorName: m.advisorId ? advisorNames.get(m.advisorId) ?? null : null,
+   741→    milestones: (milestonesBy.get(m.id) ?? []).map((ms) => ({id: ms.id, title: ms.title, status: ms.status, dueDate: ms.due_date})),
+   742→    createdAt: m.createdAt,
+   743→    submittedAt: m.submittedAt,
+   744→    activatedAt: m.activatedAt,
+   745→    closedAt: m.closedAt,
+   746→    updatedAt: m.updatedAt,
+   747→  }))
+   748→}
+   749→
+   750→// ---------------------------------------------------------------------------
+   751→// Documents & data room
+   752→// ---------------------------------------------------------------------------
+   753→
+   754→export async function documentsWorkspace() {
+   755→  const [grantRows, requestRows, accessLogRows, metaRows] = await Promise.all([
+   756→    unwrap<DocumentGrantRow[]>(
+   757→      await supabase.from('document_grants').select('*').order('created_at', {ascending: false}).limit(400),
+   758→      'documentGrants.list',
+   759→    ),
+   760→    unwrap<DocumentRequestRow[]>(
+   761→      await supabase.from('document_requests').select('*').order('created_at', {ascending: false}).limit(200),
+   762→      'documentRequests.list',
+   763→    ),
+   764→    unwrap<DocumentAccessLogRow[]>(
+   765→      await supabase.from('document_access_logs').select('*').order('created_at', {ascending: false}).limit(300),
+   766→      'docAccessLogs.list',
+   767→    ),
+   768→    unwrap<ContentMetaRow[]>(await supabase.from('content_meta').select('*').eq('content_type', 'document'), 'contentMeta.list'),
+   769→  ])
+   770→
+   771→  const userIds = [...new Set([...grantRows.map((g) => g.user_id ?? ''), ...accessLogRows.map((l) => l.user_id), ...requestRows.map((r) => r.user_id)].filter(Boolean))]
+   772→  const userRows = userIds.length ? unwrap<UserRow[]>(await supabase.from('users').select('*').in('id', userIds), 'users.list') : []
+   773→  const userBy = new Map(userRows.map((u) => [u.id, u.full_name || u.email]))
+   774→
+   775→  // Sanity document titles (server-side, all tiers)
+   776→  const client = sanityClient()
+   777→  const sanityDocs = client
+   778→    ? await client.fetch(`*[_type == "document" && defined(published) && published == true] | order(title asc) {_id, title, docType, accessTier, downloadable, publishDate, "fileExtension": file.asset->extension}`).catch(() => [])
+   779→    : []
+   780→
+   781→  return {
+   782→    grants: grantRows.map((g) => ({
+   783→      id: g.id,
+   784→      sanityDocumentId: g.sanity_document_id,
+   785→      userId: g.user_id,
+   786→      organisationId: g.organisation_id,
+   787→      permission: g.permission,
+   788→      expiresAt: g.expires_at,
+   789→      grantedById: g.granted_by_id,
+   790→      createdAt: g.created_at,
+   791→      userName: g.user_id ? userBy.get(g.user_id) ?? g.user_id : null,
+   792→    })),
+   793→    requests: toCamelList(requestRows).map((r) => ({...r, userName: userBy.get(r.userId) ?? r.userId})),
+   794→    accessLogs: accessLogRows.map((l) => ({
+   795→      id: l.id,
+   796→      userId: l.user_id,
+   797→      sanityDocumentId: l.sanity_document_id,
+   798→      documentTitle: l.document_title,
+   799→      action: l.action,
+   800→      ip: l.ip,
+   801→      createdAt: l.created_at,
+   802→      userName: userBy.get(l.user_id) ?? l.user_id,
+   803→    })),
+   804→    metas: metaRows.map((m) => ({
+   805→      sanityId: m.sanity_id,
+   806→      status: m.status,
+   807→      visibilityTier: m.visibility_tier,
+   808→      tags: m.tags,
+   809→      notes: m.notes,
+   810→    })),
+   811→    sanityDocs,
+   812→    sanityConfigured: !!client,
+   813→  }
+   814→}
+   815→
+   816→// ---------------------------------------------------------------------------
+   817→// Communications
+   818→// ---------------------------------------------------------------------------
+   819→
+   820→export async function communicationsData(actx: AdminContext, opts: {status?: string} = {}) {
+   821→  const assignedUserIds = actx.advisorId
+   822→    ? unwrap<InvestorProfileRow[]>(
+   823→        await supabase.from('investor_profiles').select('*').eq('advisor_id', actx.auth.user.id),
+   824→        'profiles.list',
+   825→      ).map((p) => p.user_id)
+   826→    : null
+   827→
+   828→  let enquiryQuery = supabase.from('enquiries').select('*')
+   829→  if (opts.status) enquiryQuery = enquiryQuery.eq('status', opts.status)
+   830→  if (assignedUserIds) enquiryQuery = enquiryQuery.in('user_id', assignedUserIds)
+   831→  const enquiryRows = unwrap<EnquiryRow[]>(
+   832→    await enquiryQuery.order('created_at', {ascending: false}).limit(200),
+   833→    'enquiries.list',
+   834→  )
+   835→  // relation include (messages) → separate query + JS join
+   836→  const enquiryIds = enquiryRows.map((e) => e.id)
+   837→  const messageRows = enquiryIds.length
+   838→    ? unwrap<MessageRow[]>(
+   839→        await supabase.from('messages').select('*').in('enquiry_id', enquiryIds).order('created_at', {ascending: true}),
+   840→        'messages.list',
+   841→      )
+   842→    : []
+   843→  const messagesBy = new Map<string, MessageRow[]>()
+   844→  for (const m of messageRows) {
+   845→    const arr = messagesBy.get(m.enquiry_id) ?? []
+   846→    arr.push(m)
+   847→    messagesBy.set(m.enquiry_id, arr)
+   848→  }
+   849→
+   850→  const userIds = [...new Set(enquiryRows.map((e) => e.user_id))]
+   851→  const userRows = userIds.length ? unwrap<UserRow[]>(await supabase.from('users').select('*').in('id', userIds), 'users.list') : []
+   852→  const profileRows = userIds.length
+   853→    ? unwrap<InvestorProfileRow[]>(await supabase.from('investor_profiles').select('*').in('user_id', userIds), 'profiles.list')
+   854→    : []
+   855→  const userBy = new Map(userRows.map((u) => [u.id, u]))
+   856→  const profileBy = new Map(profileRows.map((p) => [p.user_id, p]))
+   857→  const advisorRows = unwrap<UserRow[]>(await supabase.from('users').select('*').in('role', ['advisor', 'admin']), 'users.list')
+   858→  const advisorNames = new Map(advisorRows.map((a) => [a.id, a.full_name || a.email]))
+   859→
+   860→  const threads = enquiryRows.map((e) => {
+   861→    const messages = toCamelList(messagesBy.get(e.id) ?? [])
+   862→    const lastAdvisorMsg = [...messages].reverse().find((m) => m.senderType !== 'investor')
+   863→    const profile = profileBy.get(e.user_id)
+   864→    return {
+   865→      id: e.id,
+   866→      userId: e.user_id,
+   867→      investorName: userBy.get(e.user_id)?.full_name || userBy.get(e.user_id)?.email || e.user_id,
+   868→      investorEmail: userBy.get(e.user_id)?.email ?? '',
+   869→      investorClass: profile?.classification ?? 'individual',
+   870→      tier: profile?.access_tier ?? 'tier_1',
+   871→      assignedAdvisor: profile?.advisor_id ?? null,
+   872→      assignedAdvisorName: profile?.advisor_id ? advisorNames.get(profile.advisor_id) ?? null : null,
+   873→      subject: e.subject,
+   874→      opportunityTitle: e.opportunity_title,
+   875→      status: e.status,
+   876→      createdAt: e.created_at,
+   877→      updatedAt: e.updated_at,
+   878→      messages: messages.map((m) => ({id: m.id, senderType: m.senderType, senderId: m.senderId, senderName: m.senderId ? advisorNames.get(m.senderId) ?? null : null, body: m.body, createdAt: m.createdAt, readAt: m.readAt})),
+   879→      awaitingReply: !lastAdvisorMsg,
+   880→      lastActivityAt: messages.length > 0 ? messages[messages.length - 1].createdAt : e.created_at,
+   881→    }
+   882→  })
+   883→
+   884→  const noteRows = unwrap<InternalNoteRow[]>(
+   885→    await supabase.from('internal_notes').select('*').eq('entity_type', 'enquiry').order('created_at', {ascending: false}).limit(100),
+   886→    'internalNotes.list',
+   887→  )
+   888→  const notes = toCamelList(noteRows)
+   889→
+   890→  return {threads, notes}
+   891→}
+   892→
+   893→// ---------------------------------------------------------------------------
+   894→// Compliance workspace
+   895→// ---------------------------------------------------------------------------
+   896→
+   897→export async function complianceQueue() {
+   898→  const [pendingRows, ndaGapRows, docRequestRows, flaggedAmlRows, suspendedUserRows, reviewRows, ndaRows] = await Promise.all([
+   899→    unwrap<InvestorProfileRow[]>(
+   900→      await supabase
+   901→        .from('investor_profiles')
+   902→        .select('*')
+   903→        .or('verification_status.in.("kyc_pending","in_review","profile_submitted"),kyc_status.in.("submitted","in_review")')
+   904→        .order('updated_at', {ascending: false}),
+   905→      'profiles.list',
+   906→    ),
+   907→    unwrap<InvestorProfileRow[]>(
+   908→      await supabase.from('investor_profiles').select('*').in('access_tier', ['tier_2', 'tier_3']).eq('nda_accepted', false),
+   909→      'profiles.list',
+   910→    ),
+   911→    unwrap<DocumentRequestRow[]>(
+   912→      await supabase.from('document_requests').select('*').in('status', ['submitted', 'in_review']).order('created_at', {ascending: true}),
+   913→      'documentRequests.list',
+   914→    ),
+   915→    unwrap<InvestorProfileRow[]>(await supabase.from('investor_profiles').select('*').eq('aml_status', 'flagged'), 'profiles.list'),
+   916→    unwrap<UserRow[]>(await supabase.from('users').select('*').in('status', ['suspended', 'locked']), 'users.list'),
+   917→    unwrap<ComplianceReviewRow[]>(
+   918→      await supabase.from('compliance_reviews').select('*').order('created_at', {ascending: false}).limit(50),
+   919→      'complianceReviews.list',
+   920→    ),
+   921→    unwrap<NdaAgreementRow[]>(
+   922→      await supabase.from('nda_agreements').select('*').order('created_at', {ascending: false}).limit(100),
+   923→      'ndaAgreements.list',
+   924→    ),
+   925→  ])
+   926→  // OR(aml flagged, user suspended/locked) → two queries + JS union
+   927→  const suspendedProfileRows = suspendedUserRows.length
+   928→    ? unwrap<InvestorProfileRow[]>(
+   929→        await supabase.from('investor_profiles').select('*').in('user_id', suspendedUserRows.map((u) => u.id)),
+   930→        'profiles.list',
+   931→      )
+   932→    : []
+   933→  const flaggedBy = new Map<string, InvestorProfileRow>()
+   934→  for (const p of [...flaggedAmlRows, ...suspendedProfileRows]) flaggedBy.set(p.user_id, p)
+   935→
+   936→  // relation include → separate query + JS join
+   937→  const involvedUserIds = [...new Set([...pendingRows, ...ndaGapRows, ...flaggedBy.values()].map((p) => p.user_id))]
+   938→  const userRows = involvedUserIds.length
+   939→    ? unwrap<UserRow[]>(await supabase.from('users').select('*').in('id', involvedUserIds), 'users.list')
+   940→    : []
+   941→  const userBy = new Map(userRows.map((u) => [u.id, u]))
+   942→
+   943→  const staffIds = [...new Set(reviewRows.map((r) => r.reviewer_id).filter((x): x is string => !!x))]
+   944→  const staffRows = staffIds.length ? unwrap<UserRow[]>(await supabase.from('users').select('*').in('id', staffIds), 'users.list') : []
+   945→  const staffNames = new Map(staffRows.map((s) => [s.id, s.full_name || s.email]))
+   946→  const requestUserIds = [...new Set(docRequestRows.map((r) => r.user_id))]
+   947→  const requestUserRows = requestUserIds.length ? unwrap<UserRow[]>(await supabase.from('users').select('*').in('id', requestUserIds), 'users.list') : []
+   948→  const requestUserBy = new Map(requestUserRows.map((u) => [u.id, u.full_name || u.email]))
+   949→
+   950→  const flaggedRows = [...flaggedBy.values()]
+   951→
+   952→  return {
+   953→    pending: pendingRows.map((p) => {
+   954→      const u = userBy.get(p.user_id)
+   955→      return {
+   956→        userId: p.user_id,
+   957→        profileId: p.id,
+   958→        email: u?.email ?? '',
+   959→        fullName: u?.full_name ?? null,
+   960→        accountStatus: u?.status ?? '',
+   961→        classification: p.classification,
+   962→        verificationStatus: p.verification_status,
+   963→        kycStatus: p.kyc_status,
+   964→        amlStatus: p.aml_status,
+   965→        accessTier: p.access_tier,
+   966→        ndaAccepted: p.nda_accepted,
+   967→        nationality: p.nationality,
+   968→        countryResidence: p.country_residence,
+   969→        advisorId: p.advisor_id,
+   970→        createdAt: u?.created_at ?? null,
+   971→        updatedAt: p.updated_at,
+   972→      }
+   973→    }),
+   974→    ndaGaps: ndaGapRows.map((p) => {
+   975→      const u = userBy.get(p.user_id)
+   976→      return {userId: p.user_id, email: u?.email ?? '', fullName: u?.full_name ?? null, accessTier: p.access_tier}
+   977→    }),
+   978→    docRequests: toCamelList(docRequestRows).map((r) => ({...r, userName: requestUserBy.get(r.userId) ?? r.userId})),
+   979→    flagged: flaggedRows.map((p) => {
+   980→      const u = userBy.get(p.user_id)
+   981→      return {userId: p.user_id, email: u?.email ?? '', fullName: u?.full_name ?? null, accountStatus: u?.status ?? '', amlStatus: p.aml_status, accessTier: p.access_tier}
+   982→    }),
+   983→    reviews: toCamelList(reviewRows).map((r) => ({...r, reviewerName: staffNames.get(r.reviewerId) ?? 'Staff'})),
+   984→    ndaVersions: ndaRows.map((n) => ({id: n.id, userId: n.user_id, version: n.version, ip: n.ip, createdAt: n.created_at})),
+   985→  }
+   986→}
+   987→
+   988→// ---------------------------------------------------------------------------
+   989→// Opportunity inventory (Sanity + interaction analytics + governance meta)
+   990→// ---------------------------------------------------------------------------
+   991→
+   992→export async function opportunityInventory() {
+   993→  const [sanityOps, metaRows, viewRows, savedRows, orderRows, revenueEventRows] = await Promise.all([
+   994→    getAdminOpportunities(),
+   995→    unwrap<ContentMetaRow[]>(await supabase.from('content_meta').select('*').eq('content_type', 'opportunity'), 'contentMeta.list'),
+   996→    unwrap<OpportunityViewRow[]>(await supabase.from('opportunity_views').select('*'), 'opportunityViews.list'),
+   997→    unwrap<SavedOpportunityRow[]>(await supabase.from('saved_opportunities').select('*'), 'savedOpportunities.list'),
+   998→    unwrap<OrderRow[]>(await supabase.from('orders').select('*').not('sanity_opportunity_id', 'is', null), 'orders.list'),
+   999→    unwrap<RevenueEventRow[]>(await supabase.from('revenue_events').select('*'), 'revenue.list'),
+  1000→  ])
+  1001→  // revenue-event → order join: separate query + JS map
+  1002→  const revenueOrderRows = revenueEventRows.length
+  1003→    ? unwrap<OrderRow[]>(
+  1004→        await supabase.from('orders').select('*').in('id', [...new Set(revenueEventRows.map((e) => e.order_id))]),
+  1005→        'orders.list',
+  1006→      )
+  1007→    : []
+  1008→  const revenueOrderById = new Map(revenueOrderRows.map((o) => [o.id, o]))
+  1009→
+  1010→  const viewsBy = new Map<string, {views: number; viewers: Set<string>}>()
+  1011→  for (const v of viewRows) {
+  1012→    const cur = viewsBy.get(v.sanity_id) ?? {views: 0, viewers: new Set<string>()}
+  1013→    cur.views += 1
+  1014→    cur.viewers.add(v.user_id)
+  1015→    viewsBy.set(v.sanity_id, cur)
+  1016→  }
+  1017→  const savesBy = new Map<string, number>()
+  1018→  for (const s of savedRows) savesBy.set(s.sanity_id, (savesBy.get(s.sanity_id) ?? 0) + 1)
+  1019→  const ordersBy = new Map<string, number>()
+  1020→  for (const o of orderRows) ordersBy.set(o.sanity_opportunity_id!, (ordersBy.get(o.sanity_opportunity_id!) ?? 0) + 1)
+  1021→  const revenueBy = new Map<string, number>()
+  1022→  for (const e of revenueEventRows) {
+  1023→    const oppId = revenueOrderById.get(e.order_id)?.sanity_opportunity_id
+  1024→    if (!oppId) continue
+  1025→    revenueBy.set(oppId, (revenueBy.get(oppId) ?? 0) + e.gross_usd)
+  1026→  }
+  1027→  const metaBy = new Map(toCamelList(metaRows).map((m) => [m.sanityId, m]))
+  1028→
+  1029→  // Include Sanity documents AND any DB-tracked ids missing from Sanity.
+  1030→  const ids = new Set<string>([...sanityOps.map((o) => o._id), ...viewsBy.keys(), ...ordersBy.keys(), ...toCamelList(metaRows).map((m) => m.sanityId)])
+  1031→  const sanityById = new Map(sanityOps.map((o) => [o._id, o]))
+  1032→
+  1033→  const rows = [...ids].map((id) => {
+  1034→    const op = sanityById.get(id)
+  1035→    const meta = metaBy.get(id)
+  1036→    const analytics = viewsBy.get(id)
+  1037→    return {
+  1038→      sanityId: id,
+  1039→      title: op?.title ?? meta?.title ?? id,
+  1040→      status: op?.status ?? (meta?.status === 'archived' ? 'closed' : 'marketed'),
+  1041→      accessTier: (op?.accessTier ?? 'tier_1') as AccessTier,
+  1042→      assetClass: op?.assetClass ?? null,
+  1043→      geography: op?.geography ?? null,
+  1044→      indicativePrice: op?.indicativePrice ?? null,
+  1045→      investmentSizeMin: op?.investmentSizeMin ?? null,
+  1046→      investmentSizeMax: op?.investmentSizeMax ?? null,
+  1047→      publishDate: op?.publishDate ?? null,
+  1048→      auctionUrl: op?.auctionUrl ?? null,
+  1049→      featuredInSanity: op?.featured ?? false,
+  1050→      // governance meta
+  1051→      metaStatus: meta?.status ?? null,
+  1052→      metaTags: (meta?.tags as string[] | null) ?? [],
+  1053→      metaVisibilityTier: meta?.visibilityTier ?? null,
+  1054→      metaNotes: meta?.notes ?? null,
+  1055→      // analytics
+  1056→      views: analytics?.views ?? 0,
+  1057→      uniqueViewers: analytics?.viewers.size ?? 0,
+  1058→      saves: savesBy.get(id) ?? 0,
+  1059→      orders: ordersBy.get(id) ?? 0,
+  1060→      revenueUsd: Math.round((revenueBy.get(id) ?? 0) * 100) / 100,
+  1061→    }
+  1062→  })
+  1063→
+  1064→  return {rows, sanityConfigured: sanityOps.length > 0, studioUrl: sanityStudioUrl()}
+  1065→}
+  1066→
+  1067→// ---------------------------------------------------------------------------
+  1068→// Market Intelligence CMS
+  1069→// ---------------------------------------------------------------------------
+  1070→
+  1071→export async function intelligenceList() {
+  1072→  const [reports, metaRows] = await Promise.all([
+  1073→    getAdminReports(),
+  1074→    unwrap<ContentMetaRow[]>(await supabase.from('content_meta').select('*').eq('content_type', 'report'), 'contentMeta.list'),
+  1075→  ])
+  1076→  const metas = toCamelList(metaRows)
+  1077→  const metaBy = new Map(metas.map((m) => [m.sanityId, m]))
+  1078→  const ids = new Set<string>([...reports.map((r) => r._id), ...metas.map((m) => m.sanityId)])
+  1079→  const reportById = new Map(reports.map((r) => [r._id, r]))
+  1080→
+  1081→  return {
+  1082→    rows: [...ids].map((id) => {
+  1083→      const r = reportById.get(id)
+  1084→      const meta = metaBy.get(id)
+  1085→      return {
+  1086→        sanityId: id,
+  1087→        title: r?.title ?? meta?.title ?? id,
+  1088→        category: r?.category ?? 'commentary',
+  1089→        geography: r?.geography ?? null,
+  1090→        accessTier: (r?.accessTier ?? 'tier_1') as AccessTier,
+  1091→        publishDate: r?.publishDate ?? null,
+  1092→        metaStatus: meta?.status ?? null,
+  1093→        metaVisibilityTier: meta?.visibilityTier ?? null,
+  1094→        metaNotes: meta?.notes ?? null,
+  1095→      }
+  1096→    }),
+  1097→    sanityConfigured: reports.length > 0,
+  1098→    studioUrl: sanityStudioUrl(),
+  1099→  }
+  1100→}
+  1101→
+  1102→// ---------------------------------------------------------------------------
+  1103→// Settings, staff, sessions, audit
+  1104→// ---------------------------------------------------------------------------
+  1105→
+  1106→export async function staffList() {
+  1107→  const staffRows = unwrap<UserRow[]>(
+  1108→    await supabase.from('users').select('*').in('role', ['advisor', 'admin']).order('created_at', {ascending: true}),
+  1109→    'users.list',
+  1110→  )
+  1111→  const profileRows = unwrap<StaffProfileRow[]>(await supabase.from('staff_profiles').select('*'), 'staffProfiles.list')
+  1112→  const profileBy = new Map(profileRows.map((p) => [p.user_id, p]))
+  1113→  return staffRows.map((s) => ({
+  1114→    id: s.id,
+  1115→    email: s.email,
+  1116→    fullName: s.full_name,
+  1117→    role: s.role,
+  1118→    status: s.status,
+  1119→    lastLoginAt: s.last_login_at,
+  1120→    createdAt: s.created_at,
+  1121→    mfaEnabled: s.mfa_enabled,
+  1122→    adminRole: profileBy.get(s.id)?.admin_role ?? (s.role === 'admin' ? 'super_admin' : 'advisor'),
+  1123→    hasStaffProfile: profileBy.has(s.id),
+  1124→    title: profileBy.get(s.id)?.title ?? null,
+  1125→    team: profileBy.get(s.id)?.team ?? null,
+  1126→    isActive: profileBy.get(s.id)?.is_active ?? true,
+  1127→  }))
+  1128→}
+  1129→
+  1130→export async function settingsData() {
+  1131→  const [settingRows, staff] = await Promise.all([
+  1132→    unwrap<SystemSettingRow[]>(await supabase.from('system_settings').select('*').order('key', {ascending: true}), 'systemSettings.list'),
+  1133→    staffList(),
+  1134→  ])
+  1135→  const settings = toCamelList(settingRows)
+  1136→
+  1137→  const integrationStatus = [
+  1138→    {key: 'smtp', label: 'Email (SMTP)', configured: !!(process.env.SMTP_HOST && process.env.SMTP_USER), detail: process.env.SMTP_HOST ? `${process.env.SMTP_HOST}:${process.env.SMTP_PORT ?? '587'}` : 'SMTP_HOST / SMTP_USER not set'},
+  1139→    {key: 'sanity', label: 'Sanity CMS', configured: !!process.env.SANITY_PROJECT_ID && process.env.SANITY_PROJECT_ID !== 'your-project-id', detail: process.env.SANITY_PROJECT_ID ? `dataset: ${process.env.SANITY_DATASET || 'production'}` : 'SANITY_PROJECT_ID not set'},
+  1140→    {key: 'payments', label: 'Payments (M-Pesa / wire / card)', configured: !!process.env.MPESA_SHORTCODE || !!process.env.PAYMENTS_MODE, detail: process.env.MPESA_SHORTCODE ? 'M-Pesa shortcode configured' : 'Manual verification mode (payments verified by staff)'},
+  1141→    {key: 'auctions', label: 'Auctions (auctions.murivest.com)', configured: true, detail: 'Linked from opportunity records via auctionUrl'},
+  1142→  ]
+  1143→
+  1144→  return {settings, staff, integrationStatus}
+  1145→}
+  1146→
+  1147→export async function sessionsOverview() {
+  1148→  const sessionRows = unwrap<SessionRow[]>(
+  1149→    await supabase.from('sessions').select('*').order('last_seen_at', {ascending: false}).limit(100),
+  1150→    'sessions.list',
+  1151→  )
+  1152→  // relation include → separate query + JS join
+  1153→  const sessionUserIds = [...new Set(sessionRows.map((s) => s.user_id))]
+  1154→  const sessionUserRows = sessionUserIds.length
+  1155→    ? unwrap<UserRow[]>(await supabase.from('users').select('*').in('id', sessionUserIds), 'users.list')
+  1156→    : []
+  1157→  const sessionUserBy = new Map(sessionUserRows.map((u) => [u.id, u]))
+  1158→
+  1159→  const secEventRows = unwrap<SecurityEventRow[]>(
+  1160→    await supabase.from('security_events').select('*').order('created_at', {ascending: false}).limit(50),
+  1161→    'securityEvents.list',
+  1162→  )
+  1163→  const secUserIds = [...new Set(secEventRows.map((e) => e.user_id).filter((x): x is string => !!x))]
+  1164→  const secUserRows = secUserIds.length ? unwrap<UserRow[]>(await supabase.from('users').select('*').in('id', secUserIds), 'users.list') : []
+  1165→  const secUserBy = new Map(secUserRows.map((u) => [u.id, u]))
+  1166→
+  1167→  return {
+  1168→    sessions: sessionRows.map((s) => {
+  1169→      const u = sessionUserBy.get(s.user_id)
+  1170→      return {
+  1171→        ...toCamel(s),
+  1172→        user: u ? {id: u.id, email: u.email, fullName: u.full_name, role: u.role, status: u.status} : null,
+  1173→      }
+  1174→    }),
+  1175→    securityEvents: secEventRows.map((e) => {
+  1176→      const u = secUserBy.get(e.user_id ?? '')
+  1177→      return {
+  1178→        ...toCamel(e),
+  1179→        user: u ? {email: u.email, fullName: u.full_name} : null,
+  1180→      }
+  1181→    }),
+  1182→  }
+  1183→}
+  1184→
+  1185→export async function auditViewer(opts: {actorId?: string; entity?: string; action?: string; search?: string; limit?: number} = {}) {
+  1186→  let logQuery = auditTable().select('*').order('created_at', {ascending: false}).limit(opts.limit ?? 150)
+  1187→  if (opts.actorId) logQuery = logQuery.eq('actor_id', opts.actorId)
+  1188→  if (opts.entity) logQuery = logQuery.eq('entity', opts.entity)
+  1189→  if (opts.action) logQuery = logQuery.like('action', `%${opts.action}%`)
+  1190→  let logs = toCamelList(unwrap<AuditLogRow[]>(await logQuery, 'audit.list'))
+  1191→
+  1192→  const search = opts.search?.trim().toLowerCase()
+  1193→  if (search) {
+  1194→    logs = logs.filter((l) => JSON.stringify(l.detail ?? {}).toLowerCase().includes(search) || l.action.toLowerCase().includes(search) || (l.entityId ?? '').toLowerCase().includes(search))
+  1195→  }
+  1196→
+  1197→  const actorIds = [...new Set(logs.map((l) => l.actorId).filter((x): x is string => !!x))]
+  1198→  const actorRows = actorIds.length ? unwrap<UserRow[]>(await supabase.from('users').select('*').in('id', actorIds), 'users.list') : []
+  1199→  const actorBy = new Map(actorRows.map((a) => [a.id, {id: a.id, fullName: a.full_name, email: a.email, role: a.role}]))
+  1200→
+  1201→  return logs.map((l) => ({
+  1202→    id: l.id,
+  1203→    action: l.action,
+  1204→    entity: l.entity,
+  1205→    entityId: l.entityId,
+  1206→    actorType: l.actorType,
+  1207→    actorName: l.actorId ? actorBy.get(l.actorId)?.fullName || actorBy.get(l.actorId)?.email || l.actorId : null,
+  1208→    actorRole: l.actorId ? actorBy.get(l.actorId)?.role ?? null : null,
+  1209→    detail: l.detail,
+  1210→    ip: l.ip,
+  1211→    createdAt: l.createdAt,
+  1212→  }))
+  1213→}
+  1214→
+  1215→// ---------------------------------------------------------------------------
+  1216→// Command Centre
+  1217→// ---------------------------------------------------------------------------
+  1218→
+  1219→export async function commandCentre(actx: AdminContext, period: Period) {
+  1220→  const scope = investorScopeWhere(actx)
+  1221→  const assignedUserIds = actx.advisorId
+  1222→    ? unwrap<InvestorProfileRow[]>(
+  1223→        await supabase.from('investor_profiles').select('*').eq('advisor_id', actx.auth.user.id),
+  1224→        'profiles.list',
+  1225→      ).map((p) => p.user_id)
+  1226→    : null
+  1227→
+  1228→  const [revenue, pendingRows, openOrderRows, stalledMandateRows, openEnquiryRows, activityRows, paymentsToVerify, ordersToAssign, docRequestsPending, advisorRows] = await Promise.all([
+  1229→    revenueCardMetrics(period),
+  1230→    (async () => {
+  1231→      let q = supabase.from('investor_profiles').select('*')
+  1232→      if (scope) q = q.eq('advisor_id', scope.advisorId)
+  1233→      return unwrap<InvestorProfileRow[]>(
+  1234→        await q
+  1235→          .or('verification_status.in.("kyc_pending","in_review"),kyc_status.in.("submitted","in_review")')
+  1236→          .order('updated_at', {ascending: true})
+  1237→          .limit(10),
+  1238→        'profiles.list',
+  1239→      )
+  1240→    })(),
+  1241→    (async () => {
+  1242→      let q = supabase.from('orders').select('*').in('status', OPEN_STATUSES)
+  1243→      if (assignedUserIds) q = q.in('user_id', assignedUserIds)
+  1244→      return unwrap<OrderRow[]>(await q.order('priority', {ascending: false}).order('created_at', {ascending: true}).limit(10), 'orders.list')
+  1245→    })(),
+  1246→    assignedUserIds
+  1247→      ? mandatesByAdvisorScope(actx.auth.user.id, assignedUserIds, {status: 'active', ascending: true, limit: 10})
+  1248→      : unwrap<MandateRow[]>(
+  1249→          await supabase.from('mandates').select('*').eq('status', 'active').order('updated_at', {ascending: true}).limit(10),
+  1250→          'mandates.list',
+  1251→        ),
+  1252→    (async () => {
+  1253→      let q = supabase.from('enquiries').select('*').eq('status', 'open')
+  1254→      if (assignedUserIds) q = q.in('user_id', assignedUserIds)
+  1255→      return unwrap<EnquiryRow[]>(await q.order('created_at', {ascending: true}).limit(10), 'enquiries.list')
+  1256→    })(),
+  1257→    unwrap<AuditLogRow[]>(await auditTable().select('*').order('created_at', {ascending: false}).limit(20), 'audit.recent'),
+  1258→    unwrapCount(await supabase.from('payments').select('*', {count: 'exact', head: true}).eq('status', 'submitted'), 'payments.count'),
+  1259→    unwrapCount(
+  1260→      await supabase
+  1261→        .from('orders')
+  1262→        .select('*', {count: 'exact', head: true})
+  1263→        .in('status', ['payment_confirmed', 'processing'])
+  1264→        .is('assigned_to_id', null),
+  1265→      'orders.count',
+  1266→    ),
+  1267→    unwrapCount(await supabase.from('document_requests').select('*', {count: 'exact', head: true}).eq('status', 'submitted'), 'documentRequests.count'),
+  1268→    unwrap<UserRow[]>(await supabase.from('users').select('*').in('role', ['advisor', 'admin']), 'users.list'),
+  1269→  ])
+  1270→
+  1271→  // relation include → separate query + JS join
+  1272→  const pendingUserIds = pendingRows.map((p) => p.user_id)
+  1273→  const pendingUserRows = pendingUserIds.length
+  1274→    ? unwrap<UserRow[]>(await supabase.from('users').select('*').in('id', pendingUserIds), 'users.list')
+  1275→    : []
+  1276→  const pendingUserBy = new Map(pendingUserRows.map((u) => [u.id, u]))
+  1277→
+  1278→  // relation include (payments.status) → separate query + JS join
+  1279→  const openOrderIds = openOrderRows.map((o) => o.id)
+  1280→  const openOrderPaymentRows = openOrderIds.length
+  1281→    ? unwrap<PaymentRow[]>(await supabase.from('payments').select('*').in('order_id', openOrderIds), 'payments.list')
+  1282→    : []
+  1283→  const openOrderPaymentsBy = new Map<string, PaymentRow[]>()
+  1284→  for (const p of openOrderPaymentRows) {
+  1285→    const arr = openOrderPaymentsBy.get(p.order_id) ?? []
+  1286→    arr.push(p)
+  1287→    openOrderPaymentsBy.set(p.order_id, arr)
+  1288→  }
+  1289→
+  1290→  // relation include (non-investor messages, id only) → separate query + JS join
+  1291→  const openEnquiryIds = openEnquiryRows.map((e) => e.id)
+  1292→  const staffMessageRows = openEnquiryIds.length
+  1293→    ? unwrap<MessageRow[]>(
+  1294→        await supabase.from('messages').select('*').in('enquiry_id', openEnquiryIds).not('sender_type', 'eq', 'investor'),
+  1295→        'messages.list',
+  1296→      )
+  1297→    : []
+  1298→  const staffMessagesBy = new Map<string, MessageRow[]>()
+  1299→  for (const m of staffMessageRows) {
+  1300→    const arr = staffMessagesBy.get(m.enquiry_id) ?? []
+  1301→    arr.push(m)
+  1302→    staffMessagesBy.set(m.enquiry_id, arr)
+  1303→  }
+  1304→
+  1305→  const actorIds = [...new Set(activityRows.map((a) => a.actor_id).filter((x): x is string => !!x))]
+  1306→  const actorRows = actorIds.length ? unwrap<UserRow[]>(await supabase.from('users').select('*').in('id', actorIds), 'users.list') : []
+  1307→  const actorBy = new Map(actorRows.map((a) => [a.id, a.full_name || a.email]))
+  1308→  const activity = toCamelList(activityRows)
+  1309→
+  1310→  const now = Date.now()
+  1311→  return {
+  1312→    revenue,
+  1313→    queues: {
+  1314→      pendingVerifications: pendingRows.map((p) => {
+  1315→        const u = pendingUserBy.get(p.user_id)
+  1316→        return {
+  1317→          userId: p.user_id,
+  1318→          name: u?.full_name || u?.email || p.user_id,
+  1319→          email: u?.email ?? '',
+  1320→          verificationStatus: p.verification_status,
+  1321→          kycStatus: p.kyc_status,
+  1322→          accessTier: p.access_tier,
+  1323→          waitingDays: Math.floor((now - new Date(p.created_at).getTime()) / 86400000),
+  1324→        }
+  1325→      }),
+  1326→      openOrders: openOrderRows.map((o) => ({
+  1327→        id: o.id,
+  1328→        reference: o.reference,
+  1329→        briefTitle: o.brief_title,
+  1330→        status: o.status,
+  1331→        priority: o.priority,
+  1332→        amountUsd: o.amount_usd,
+  1333→        currency: o.currency,
+  1334→        createdAt: o.created_at,
+  1335→        dueAt: o.due_at,
+  1336→        assigned: !!o.assigned_to_id,
+  1337→        paid: (openOrderPaymentsBy.get(o.id) ?? []).some((p) => p.status === 'verified'),
+  1338→      })),
+  1339→      stalledMandates: stalledMandateRows.map((m) => ({
+  1340→        id: m.id,
+  1341→        reference: m.reference,
+  1342→        title: m.title,
+  1343→        stage: m.stage,
+  1344→        probability: m.probability,
+  1345→        nextAction: m.next_action,
+  1346→        nextActionDue: m.next_action_due,
+  1347→        daysSinceUpdate: Math.floor((now - new Date(m.updated_at).getTime()) / 86400000),
+  1348→      })),
+  1349→      openEnquiries: openEnquiryRows.map((e) => ({
+  1350→        id: e.id,
+  1351→        subject: e.subject,
+  1352→        createdAt: e.created_at,
+  1353→        awaitingReply: (staffMessagesBy.get(e.id) ?? []).length === 0,
+  1354→      })),
+  1355→    },
+  1356→    activity: activity.map((a) => ({
+  1357→      id: a.id,
+  1358→      action: a.action,
+  1359→      entity: a.entity,
+  1360→      entityId: a.entityId,
+  1361→      actorName: a.actorId ? actorBy.get(a.actorId) ?? a.actorId : 'System',
+  1362→      actorType: a.actorType,
+  1363→      createdAt: a.createdAt,
+  1364→      detail: a.detail,
+  1365→    })),
+  1366→    quickActions: {
+  1367→      paymentsToVerify,
+  1368→      ordersToAssign,
+  1369→      docRequestsPending,
+  1370→      newEnquiries: openEnquiryRows.length,
+  1371→    },
+  1372→    advisors: advisorRows.map((a) => ({id: a.id, name: a.full_name || a.email, role: a.role})),
+  1373→  }
+  1374→}
+  1375→
+  1376→export {OPEN_STATUSES}
+  1377→

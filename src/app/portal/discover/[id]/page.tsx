@@ -1,7 +1,8 @@
 import type {Metadata} from 'next'
 import Link from 'next/link'
 import {notFound} from 'next/navigation'
-import {db} from '@/lib/db'
+import {supabase, unwrapNullable} from '@/lib/supabase'
+import type {SavedOpportunityRow} from '@/lib/db-types'
 import {
   ArrowRight,
   BookOpenCheck,
@@ -42,7 +43,13 @@ export default async function OpportunityDetailPage({params}: {params: Promise<{
   const o = opportunity
 
   const [saved, briefs, documents] = await Promise.all([
-    db.savedOpportunity.findUnique({where: {userId_sanityId: {userId: uid, sanityId: o._id}}}).then(Boolean),
+    supabase
+      .from('saved_opportunities')
+      .select('id')
+      .eq('user_id', uid)
+      .eq('sanity_id', o._id)
+      .maybeSingle()
+      .then((res) => unwrapNullable<Pick<SavedOpportunityRow, 'id'>>(res, 'savedOpportunities.check') !== null),
     getBriefs(ctx.effectiveTier),
     getDocuments(ctx.effectiveTier),
   ])

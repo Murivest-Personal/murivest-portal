@@ -1,6 +1,7 @@
 import {sendNotification, setVapidDetails, WebPushError} from 'web-push'
 import type {PushSubscription as WpSubscription} from 'web-push'
-import {db} from '@/lib/db'
+import {supabase, unwrap, toCamelList, nowIso} from '@/lib/supabase'
+import type {PushSubscriptionRow} from '@/lib/db-types'
 
 /**
  * Web Push (VAPID) delivery — desktop browsers and installed PWA/mobile.
@@ -65,9 +66,12 @@ export async function sendPushToUser(userId: string, payload: PushPayload): Prom
   if (!ensureConfigured()) {
     return [{endpointId: '-', deviceLabel: null, status: 'skipped', detail: 'VAPID keys not configured'}]
   }
-  const subs = await db.pushSubscription.findMany({
-    where: {userId, revokedAt: null},
-  })
+  const subs = toCamelList(
+    unwrap<PushSubscriptionRow[]>(
+      await supabase.from('push_subscriptions').select('*').eq('user_id', userId).is('revoked_at', null),
+      'pushSubscriptions.active',
+    ),
+  )
   if (subs.length === 0) return []
 
   const data = JSON.stringify(payload)
@@ -83,12 +87,20 @@ export async function sendPushToUser(userId: string, payload: PushPayload): Prom
           {timeout: TIMEOUT_MS},
         )
         results.push({endpointId: sub.id, deviceLabel: sub.deviceLabel, status: 'sent'})
-        await db.pushSubscription.update({where: {id: sub.id}, data: {lastSeenAt: new Date()}}).catch(() => {})
+        await supabase
+          .from('push_subscriptions')
+          .update({last_seen_at: nowIso()})
+          .eq('id', sub.id)
+          .then(() => undefined, () => undefined)
       } catch (err) {
         const status = err instanceof WebPushError && (err.statusCode === 404 || err.statusCode === 410) ? 'gone' : 'failed'
         const detail = err instanceof Error ? err.message.slice(0, 300) : 'push error'
         if (status === 'gone') {
-          await db.pushSubscription.update({where: {id: sub.id}, data: {revokedAt: new Date()}}).catch(() => {})
+          await supabase
+            .from('push_subscriptions')
+            .update({revoked_at: nowIso()})
+            .eq('id', sub.id)
+            .then(() => undefined, () => undefined)
         }
         results.push({endpointId: sub.id, deviceLabel: sub.deviceLabel, status, detail})
       }

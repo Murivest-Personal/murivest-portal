@@ -1,5 +1,6 @@
 import type {Metadata} from 'next'
-import {db} from '@/lib/db'
+import {supabase, unwrap, toCamelList} from '@/lib/supabase'
+import type {MandateMilestoneRow, MandateRow as MandateDbRow} from '@/lib/db-types'
 import {requirePortalUser} from '@/lib/auth/context'
 import MandatesWorkspace, {type MandateRow} from '@/components/portal/mandates/MandatesWorkspace'
 
@@ -12,11 +13,29 @@ export const dynamic = 'force-dynamic'
 
 export default async function MandatesPage() {
   const ctx = await requirePortalUser()
-  const mandates = await db.mandate.findMany({
-    where: {userId: ctx.user.id},
-    orderBy: {createdAt: 'desc'},
-    include: {milestones: {orderBy: {createdAt: 'asc'}}},
-  })
+  const mandates = toCamelList(
+    unwrap<MandateDbRow[]>(
+      await supabase.from('mandates').select('*').eq('user_id', ctx.user.id).order('created_at', {ascending: false}),
+      'mandates.list',
+    ),
+  )
+
+  // relation include (milestones) → separate query + JS join
+  const mandateIds = mandates.map((m) => m.id)
+  const milestoneRows = mandateIds.length
+    ? toCamelList(
+        unwrap<MandateMilestoneRow[]>(
+          await supabase.from('mandate_milestones').select('*').in('mandate_id', mandateIds).order('created_at', {ascending: true}),
+          'mandateMilestones.list',
+        ),
+      )
+    : []
+  const milestonesBy = new Map<string, typeof milestoneRows>()
+  for (const ms of milestoneRows) {
+    const arr = milestonesBy.get(ms.mandateId) ?? []
+    arr.push(ms)
+    milestonesBy.set(ms.mandateId, arr)
+  }
 
   const rows: MandateRow[] = mandates.map((m) => ({
     id: m.id,
@@ -37,17 +56,17 @@ export default async function MandatesPage() {
     leverageComfort: m.leverageComfort,
     riskMandate: m.riskMandate,
     exclusions: (m.exclusions as string[]) ?? null,
-    submittedAt: m.submittedAt?.toISOString() ?? null,
-    activatedAt: m.activatedAt?.toISOString() ?? null,
-    closedAt: m.closedAt?.toISOString() ?? null,
-    createdAt: m.createdAt.toISOString(),
-    milestones: m.milestones.map((ms) => ({
+    submittedAt: m.submittedAt ?? null,
+    activatedAt: m.activatedAt ?? null,
+    closedAt: m.closedAt ?? null,
+    createdAt: m.createdAt,
+    milestones: (milestonesBy.get(m.id) ?? []).map((ms) => ({
       id: ms.id,
       title: ms.title,
       detail: ms.detail,
-      dueDate: ms.dueDate?.toISOString() ?? null,
+      dueDate: ms.dueDate ?? null,
       status: ms.status,
-      completedAt: ms.completedAt?.toISOString() ?? null,
+      completedAt: ms.completedAt ?? null,
     })),
   }))
 

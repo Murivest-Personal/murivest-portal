@@ -1,11 +1,12 @@
 import {NextResponse, type NextRequest} from 'next/server'
 import {z} from 'zod'
-import {db} from '@/lib/db'
+import {supabase, unwrap, unwrapNullable, toCamelList, toSnake, nowIso, newId} from '@/lib/supabase'
 import {requireApiUser, isResponse} from '@/lib/auth/context'
 import {parseBody} from '@/lib/api'
 import {audit} from '@/lib/auth/audit'
 import {CHANNELS, NOTIFICATION_CATEGORIES, DEFAULT_CHANNEL_MATRIX} from '@/lib/notifications/events'
 import {getEffectivePreferences} from '@/lib/notifications/preferences'
+import type {NotificationSettingRow, PushSubscriptionRow} from '@/lib/db-types'
 
 /**
  * Notification preferences — Profile & Preferences → Notifications, also
@@ -42,13 +43,18 @@ export async function GET() {
 
   const prefs = await getEffectivePreferences(userId)
   const [settings, subs] = await Promise.all([
-    db.notificationSetting.findUnique({where: {userId}}),
-    db.pushSubscription.findMany({
-      where: {userId, revokedAt: null},
-      select: {id: true, platform: true, deviceLabel: true, lastSeenAt: true, createdAt: true, endpoint: true},
-      orderBy: {createdAt: 'desc'},
-    }),
+    supabase.from('notification_settings').select('*').eq('user_id', userId).maybeSingle(),
+    supabase
+      .from('push_subscriptions')
+      .select('id, platform, device_label, last_seen_at, created_at, endpoint')
+      .eq('user_id', userId)
+      .is('revoked_at', null)
+      .order('created_at', {ascending: false}),
   ])
+  unwrapNullable<NotificationSettingRow>(settings, 'notificationSettings.get')
+  const subscriptions = toCamelList(
+    unwrap<Pick<PushSubscriptionRow, 'id' | 'platform' | 'device_label' | 'last_seen_at' | 'created_at' | 'endpoint'>[]>(subs, 'pushSubscriptions.list'),
+  )
 
   return NextResponse.json({
     ok: true,
@@ -63,7 +69,7 @@ export async function GET() {
     matrix: prefs.matrix,
     explicit: prefs.explicit,
     defaults: DEFAULT_CHANNEL_MATRIX,
-    pushSubscriptions: subs,
+    pushSubscriptions: subscriptions,
   })
 }
 
@@ -83,22 +89,34 @@ export async function PUT(req: NextRequest) {
   if (data.digestFrequency !== undefined) settingData.digestFrequency = data.digestFrequency
 
   if (Object.keys(settingData).length > 0) {
-    await db.notificationSetting.upsert({
-      where: {userId},
-      create: {userId, ...settingData},
-      update: settingData,
-    })
+    // Upsert keyed on the unique user_id — the payload carries the global
+    // switches; the DB trigger maintains updated_at.
+    unwrap(
+      await supabase
+        .from('notification_settings')
+        .upsert([toSnake({id: newId(), userId, ...settingData, createdAt: nowIso(), updatedAt: nowIso()})], {
+          onConflict: 'user_id',
+        }),
+      'notificationSettings.upsert',
+    )
   }
 
   if (data.resetToDefaults) {
-    await db.notificationPreference.deleteMany({where: {userId}})
+    unwrap(
+      await supabase.from('notification_preferences').delete().eq('user_id', userId),
+      'notificationPreferences.reset',
+    )
   } else if (data.matrix && data.matrix.length > 0) {
     for (const cell of data.matrix) {
-      await db.notificationPreference.upsert({
-        where: {userId_channel_category: {userId, channel: cell.channel, category: cell.category}},
-        create: {userId, channel: cell.channel, category: cell.category, enabled: cell.enabled},
-        update: {enabled: cell.enabled},
-      })
+      unwrap(
+        await supabase
+          .from('notification_preferences')
+          .upsert(
+            [toSnake({id: newId(), userId, channel: cell.channel, category: cell.category, enabled: cell.enabled, createdAt: nowIso(), updatedAt: nowIso()})],
+            {onConflict: 'user_id,channel,category'},
+          ),
+        'notificationPreferences.upsert',
+      )
     }
   }
 
@@ -113,3 +131,4 @@ export async function PUT(req: NextRequest) {
   const prefs = await getEffectivePreferences(userId)
   return NextResponse.json({ok: true, matrix: prefs.matrix, explicit: prefs.explicit})
 }
+

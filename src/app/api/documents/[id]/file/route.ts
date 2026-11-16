@@ -1,9 +1,10 @@
 import {NextResponse, type NextRequest} from 'next/server'
-import {db} from '@/lib/db'
+import {supabase, unwrap, toCamelList, nowIso, newId} from '@/lib/supabase'
 import {getDocumentById, getFileAssetUrl} from '@/lib/sanity/queries'
 import {audit} from '@/lib/auth/audit'
 import {requireApiUser, isResponse} from '@/lib/auth/context'
 import {toIpString, userAgentOf} from '@/lib/auth/request-meta'
+import type {DocumentGrantRow} from '@/lib/db-types'
 
 type Params = {params: Promise<{id: string}>}
 
@@ -35,13 +36,17 @@ export async function GET(req: NextRequest, {params}: Params) {
 
   // Explicit grants: if the studio granted this document to specific
   // investors/organisations, tier alone is insufficient.
-  const grants = await db.documentGrant.findMany({where: {sanityDocumentId: id}})
+  const grantRows = unwrap<DocumentGrantRow[]>(
+    await supabase.from('document_grants').select('*').eq('sanity_document_id', id),
+    'documentGrants.byDoc',
+  )
+  const grants = toCamelList(grantRows)
   if (grants.length > 0) {
     const orgId = ctx.profile?.organisationId ?? null
     const allowed = grants.some(
       (g) =>
         (g.userId === ctx.user.id && (g.permission === 'download' || !wantsDownload || g.permission === 'download')) ||
-        (g.organisationId && g.organisationId === orgId && (!g.expiresAt || g.expiresAt > new Date())),
+        (g.organisationId && g.organisationId === orgId && (!g.expiresAt || new Date(g.expiresAt) > new Date())),
     )
     if (!allowed) {
       return NextResponse.json({error: 'This document requires a specific grant from your advisor.'}, {status: 403})
@@ -70,13 +75,24 @@ export async function GET(req: NextRequest, {params}: Params) {
     return NextResponse.json({error: 'File could not be retrieved.'}, {status: 502})
   }
 
+
   // Access log + audit (view or download)
   const ip = toIpString(req)
   const ua = userAgentOf(req)
   const action = wantsDownload ? 'download' : 'view'
-  await db.documentAccessLog.create({
-    data: {userId: ctx.user.id, sanityDocumentId: id, documentTitle: doc.title, action, ip, userAgent: ua},
-  })
+  unwrap<null>(
+    await supabase.from('document_access_logs').insert({
+      id: newId(),
+      user_id: ctx.user.id,
+      sanity_document_id: id,
+      document_title: doc.title,
+      action,
+      ip,
+      user_agent: ua,
+      created_at: nowIso(),
+    }),
+    'documentAccessLogs.create',
+  )
   await audit({actorId: ctx.user.id, action: `document.${action}`, entity: 'document', entityId: id, detail: {title: doc.title}, ip, userAgent: ua})
 
   const filename = `${doc.title.replace(/[^\w\d\-. ]+/g, '_')}${doc.fileExtension ? '.' + doc.fileExtension : ''}`

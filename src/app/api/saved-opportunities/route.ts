@@ -1,8 +1,9 @@
 import {NextResponse, type NextRequest} from 'next/server'
 import {z} from 'zod'
-import {db} from '@/lib/db'
+import {supabase, unwrap, unwrapNullable, nowIso, newId} from '@/lib/supabase'
 import {requireApiUser, isResponse} from '@/lib/auth/context'
 import {parseBody} from '@/lib/api'
+import type {SavedOpportunityRow} from '@/lib/db-types'
 
 const toggleSchema = z.object({
   sanityId: z.string().min(1).max(64),
@@ -17,13 +18,33 @@ export async function POST(req: NextRequest) {
   if ('response' in parsed) return parsed.response
   const {sanityId, note} = parsed.data
 
-  const existing = await db.savedOpportunity.findUnique({
-    where: {userId_sanityId: {userId: guard.ctx.user.id, sanityId}},
-  })
+  const existing = unwrapNullable<SavedOpportunityRow>(
+    await supabase
+      .from('saved_opportunities')
+      .select('id')
+      .eq('user_id', guard.ctx.user.id)
+      .eq('sanity_id', sanityId)
+      .maybeSingle(),
+    'savedOpportunities.get',
+  )
   if (existing) {
-    await db.savedOpportunity.delete({where: {id: existing.id}})
+    unwrap(
+      await supabase.from('saved_opportunities').delete().eq('id', existing.id),
+      'savedOpportunities.delete',
+    )
     return NextResponse.json({ok: true, saved: false})
   }
-  await db.savedOpportunity.create({data: {userId: guard.ctx.user.id, sanityId, note: note ?? null}})
+  unwrap(
+    await supabase
+      .from('saved_opportunities')
+      .insert({
+        id: newId(),
+        user_id: guard.ctx.user.id,
+        sanity_id: sanityId,
+        note: note ?? null,
+        created_at: nowIso(),
+      }),
+    'savedOpportunities.create',
+  )
   return NextResponse.json({ok: true, saved: true})
 }

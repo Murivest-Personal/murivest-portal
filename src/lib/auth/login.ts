@@ -1,7 +1,8 @@
-import {db} from '@/lib/db'
+import {supabase, unwrap, unwrapNullable, toCamel, nowIso, newId} from '@/lib/supabase'
 import {generateSessionToken, hashToken, sessionExpiry, describeDevice} from './session'
 import {securityEvent, notify} from './audit'
 import {toIpString, userAgentOf} from './request-meta'
+import type {SessionRow} from '@/lib/db-types'
 
 /**
  * Session lifecycle: creation with device recognition, revocation.
@@ -15,24 +16,45 @@ export async function createSession(userId: string, req: Request) {
   // Device recognition: if this user has no prior session with this device
   // signature, record a security event and notify the investor.
   const device = describeDevice(userAgent)
-  const prior = await db.session.findFirst({
-    where: {userId, device, OR: [{revokedAt: null}, {revokedAt: {not: null}}]},
-    orderBy: {createdAt: 'desc'},
-  })
+  const prior = unwrapNullable<Pick<SessionRow, 'id'>>(
+    await supabase
+      .from('sessions')
+      .select('id')
+      .eq('user_id', userId)
+      .eq('device', device)
+      .order('created_at', {ascending: false})
+      .limit(1)
+      .maybeSingle(),
+    'session.priorDevice',
+  )
   const isNewDevice = !prior
 
-  const session = await db.session.create({
-    data: {
-      userId,
-      tokenHash: hashToken(token),
-      userAgent,
-      ip,
-      device,
-      expiresAt: sessionExpiry(),
-    },
-  })
+  const sessionRow = unwrap<SessionRow>(
+    await supabase
+      .from('sessions')
+      .insert({
+        id: newId(),
+        user_id: userId,
+        token_hash: hashToken(token),
+        user_agent: userAgent,
+        ip,
+        device,
+        expires_at: sessionExpiry().toISOString(),
+        created_at: nowIso(),
+      })
+      .select('*')
+      .single(),
+    'session.create',
+  )
+  const session = toCamel(sessionRow)
 
-  await db.user.update({where: {id: userId}, data: {lastLoginAt: new Date(), failedLogins: 0, lockedUntil: null}})
+  unwrap(
+    await supabase
+      .from('users')
+      .update({last_login_at: nowIso(), failed_logins: 0, locked_until: null})
+      .eq('id', userId),
+    'users.touchLogin',
+  )
 
   if (isNewDevice) {
     await securityEvent({userId, type: 'new_device', ip, userAgent, detail: {device}})
@@ -54,12 +76,18 @@ export async function createSession(userId: string, req: Request) {
 }
 
 export async function revokeSession(sessionId: string) {
-  await db.session.update({where: {id: sessionId}, data: {revokedAt: new Date()}})
+  unwrap(
+    await supabase.from('sessions').update({revoked_at: nowIso()}).eq('id', sessionId),
+    'session.revoke',
+  )
 }
 
 export async function revokeAllSessions(userId: string, exceptSessionId?: string) {
-  await db.session.updateMany({
-    where: {userId, ...(exceptSessionId ? {id: {not: exceptSessionId}} : {}), revokedAt: null},
-    data: {revokedAt: new Date()},
-  })
+  let query = supabase
+    .from('sessions')
+    .update({revoked_at: nowIso()})
+    .eq('user_id', userId)
+    .is('revoked_at', null)
+  if (exceptSessionId) query = query.not('id', 'eq', exceptSessionId)
+  unwrap(await query, 'session.revokeAll')
 }

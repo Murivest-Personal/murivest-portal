@@ -1,9 +1,10 @@
 import {NextResponse, type NextRequest} from 'next/server'
-import {db} from '@/lib/db'
+import {supabase, unwrap, toSnake, nowIso, newId} from '@/lib/supabase'
 import {criteriaSchema} from '@/lib/validation'
 import {audit} from '@/lib/auth/audit'
 import {requireApiUser, isResponse} from '@/lib/auth/context'
 import {parseBody, clientMeta} from '@/lib/api'
+import type {InvestorCriteriaRow} from '@/lib/db-types'
 
 /** Investment Criteria Workspace — one live criteria set per investor. */
 export async function PUT(req: NextRequest) {
@@ -36,12 +37,22 @@ export async function PUT(req: NextRequest) {
     exitPreferences: (c.exitPreferences ?? undefined) as never,
   }
 
-  const criteria = await db.investorCriteria.upsert({
-    where: {userId: ctx.user.id},
-    create: {userId: ctx.user.id, ...data},
-    update: data,
-  })
+  // One live criteria set per investor (upsert keyed on the unique user_id).
+  // Undefined keys are dropped in serialization, exactly like Prisma skipped
+  // undefined fields on both the insert and the update branch.
+  unwrap(
+    await supabase
+      .from('investor_criteria')
+      .upsert([toSnake({id: newId(), userId: ctx.user.id, ...data, createdAt: nowIso(), updatedAt: nowIso()})], {
+        onConflict: 'user_id',
+      }),
+    'criteria.upsert',
+  )
+  const criteriaRow = unwrap<InvestorCriteriaRow>(
+    await supabase.from('investor_criteria').select('*').eq('user_id', ctx.user.id).single(),
+    'criteria.get',
+  )
 
-  await audit({actorId: ctx.user.id, action: 'criteria.updated', entity: 'criteria', entityId: criteria.id, ...clientMeta(req)})
+  await audit({actorId: ctx.user.id, action: 'criteria.updated', entity: 'criteria', entityId: criteriaRow.id, ...clientMeta(req)})
   return NextResponse.json({ok: true})
 }

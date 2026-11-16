@@ -1,7 +1,8 @@
 import {notFound} from 'next/navigation'
 import {requireAdminPage} from '@/lib/admin/rbac'
 import {orderDetail} from '@/lib/admin/queries'
-import {db} from '@/lib/db'
+import {supabase, unwrap, toCamelList} from '@/lib/supabase'
+import type {UserRow} from '@/lib/db-types'
 import OrderDetailWorkspace from '@/components/admin/OrderDetailWorkspace'
 import {PageHeader} from '@/components/admin/ui'
 
@@ -13,11 +14,17 @@ export default async function AdminOrderDetailPage({params}: {params: Promise<{i
   const detail = await orderDetail(actx, id)
   if (!detail) notFound()
 
-  const staff = await db.user.findMany({
-    where: {role: {in: ['advisor', 'admin']}, status: 'active'},
-    select: {id: true, fullName: true, email: true},
-    orderBy: {fullName: 'asc'},
-  })
+  const staff = toCamelList(
+    unwrap<Pick<UserRow, 'id' | 'full_name' | 'email'>[]>(
+      await supabase
+        .from('users')
+        .select('id, full_name, email')
+        .in('role', ['advisor', 'admin'])
+        .eq('status', 'active')
+        .order('full_name', {ascending: true}),
+      'users.staff',
+    ),
+  )
 
   return (
     <div>
@@ -26,11 +33,11 @@ export default async function AdminOrderDetailPage({params}: {params: Promise<{i
         data={{
           order: {
             ...detail.order,
-            dueAt: detail.order.dueAt?.toISOString() ?? null,
-            deliveredAt: detail.order.deliveredAt?.toISOString() ?? null,
-            closedAt: detail.order.closedAt?.toISOString() ?? null,
-            cancelledAt: detail.order.cancelledAt?.toISOString() ?? null,
-            createdAt: detail.order.createdAt.toISOString(),
+            dueAt: detail.order.dueAt ?? null,
+            deliveredAt: detail.order.deliveredAt ?? null,
+            closedAt: detail.order.closedAt ?? null,
+            cancelledAt: detail.order.cancelledAt ?? null,
+            createdAt: detail.order.createdAt,
           },
           investor: {
             user: detail.investor.user,
@@ -48,14 +55,14 @@ export default async function AdminOrderDetailPage({params}: {params: Promise<{i
           },
           payments: detail.payments.map((p) => ({
             ...p,
-            verifiedAt: p.verifiedAt?.toISOString() ?? null,
-            createdAt: p.createdAt.toISOString(),
+            verifiedAt: p.verifiedAt ?? null,
+            createdAt: p.createdAt,
           })),
-          events: detail.events.map((e) => ({...e, createdAt: e.createdAt.toISOString()})),
-          notes: detail.notes.map((n) => ({...n, createdAt: n.createdAt.toISOString()})),
+          events: detail.events.map((e) => ({...e, createdAt: e.createdAt})),
+          notes: detail.notes.map((n) => ({...n, createdAt: n.createdAt})),
           refunds: detail.refunds.map((r) => ({
             ...r,
-            createdAt: r.createdAt.toISOString(),
+            createdAt: r.createdAt,
           })),
           revenue: detail.revenue
             ? {
@@ -64,7 +71,7 @@ export default async function AdminOrderDetailPage({params}: {params: Promise<{i
                 processingUsd: detail.revenue.processingUsd,
                 refundUsd: detail.revenue.refundUsd,
                 netUsd: detail.revenue.netUsd,
-                recognisedAt: detail.revenue.recognisedAt.toISOString(),
+                recognisedAt: detail.revenue.recognisedAt,
               }
             : null,
           assignment: detail.assignment,

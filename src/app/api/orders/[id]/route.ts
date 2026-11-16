@@ -1,9 +1,10 @@
 import {NextResponse, type NextRequest} from 'next/server'
 import {z} from 'zod'
-import {db} from '@/lib/db'
+import {supabase, unwrap, unwrapNullable, toCamel, nowIso} from '@/lib/supabase'
 import {audit, notify} from '@/lib/auth/audit'
 import {requireApiUser, isResponse} from '@/lib/auth/context'
 import {parseBody, fail, clientMeta} from '@/lib/api'
+import type {OrderRow} from '@/lib/db-types'
 
 type Params = {params: Promise<{id: string}>}
 
@@ -16,7 +17,11 @@ export async function POST(req: NextRequest, {params}: Params) {
   const guard = await requireApiUser()
   if (isResponse(guard)) return guard.response
   const {id} = await params
-  const order = await db.order.findFirst({where: {id, userId: guard.ctx.user.id}})
+  const orderRow = unwrapNullable<OrderRow>(
+    await supabase.from('orders').select('*').eq('id', id).eq('user_id', guard.ctx.user.id).maybeSingle(),
+    'orders.get',
+  )
+  const order = orderRow ? toCamel(orderRow) : null
   if (!order) return fail('Order not found.', 404)
   if (!CANCELLABLE.includes(order.status)) {
     return fail('This order can no longer be cancelled. Contact your advisor.', 409)
@@ -24,10 +29,18 @@ export async function POST(req: NextRequest, {params}: Params) {
   const parsed = await parseBody(req, cancelSchema)
   if ('response' in parsed) return parsed.response
 
-  await db.order.update({
-    where: {id},
-    data: {status: 'cancelled', cancelledAt: new Date(), cancellationReason: parsed.data.reason ?? null},
-  })
+  // updated_at is maintained by the DB trigger — not set here.
+  unwrap<null>(
+    await supabase
+      .from('orders')
+      .update({
+        status: 'cancelled',
+        cancelled_at: nowIso(),
+        cancellation_reason: parsed.data.reason ?? null,
+      })
+      .eq('id', id),
+    'orders.cancel',
+  )
   await notify({
     userId: guard.ctx.user.id,
     type: 'order_status',
