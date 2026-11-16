@@ -90,7 +90,7 @@ export default function IntelligenceWorkspace({
                     {canManage ? (
                       <>
                         <select
-                          className="border border-border bg-background px-2 py-1 text-xs focus:border-gold focus:outline-none"
+                          className="rounded-standard border border-border bg-background px-2 py-1 text-xs focus:border-primary"
                           value={r.metaVisibilityTier ?? r.accessTier}
                           onChange={(e) => setMeta(r.sanityId, {visibilityTier: e.target.value})}
                           disabled={busyId === r.sanityId}
@@ -101,7 +101,7 @@ export default function IntelligenceWorkspace({
                           ))}
                         </select>
                         <select
-                          className="border border-border bg-background px-2 py-1 text-xs focus:border-gold focus:outline-none"
+                          className="rounded-standard border border-border bg-background px-2 py-1 text-xs focus:border-primary"
                           value={r.metaStatus ?? 'live'}
                           onChange={(e) => setMeta(r.sanityId, {status: e.target.value})}
                           disabled={busyId === r.sanityId}

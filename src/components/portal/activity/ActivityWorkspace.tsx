@@ -27,7 +27,7 @@ export interface ThreadRow {
   messages: {id: string; senderType: string; body: string; createdAt: string; readAt: string | null}[]
 }
 
-const input = 'w-full border border-border bg-background px-4 py-3 text-sm text-foreground focus:border-gold focus:outline-none'
+const input = 'w-full rounded-standard border border-border bg-background px-4 py-3 text-sm text-foreground focus:border-primary'
 const label = 'mb-1.5 block text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground'
 
 const KIND_LABEL: Record<string, string> = {
@@ -117,14 +117,14 @@ export default function ActivityWorkspace({
 
   return (
     <div>
-      <div className="mb-6 grid grid-cols-2 border border-border bg-card text-center text-[11px] uppercase tracking-[0.14em]">
+      <div className="mb-6 inline-flex rounded-pill border border-border bg-card p-1 text-center text-[11px] uppercase tracking-[0.14em] shadow-card" role="tablist">
         {(
           [
             ['threads', `Advisor threads (${threads.length})`],
             ['timeline', `Activity timeline (${timeline.length})`],
           ] as const
         ).map(([key, lbl]) => (
-          <button key={key} type="button" role="tab" aria-selected={tab === key} onClick={() => setTab(key)} className={cn('px-2 py-3 transition-colors', tab === key ? 'bg-gold/10 font-semibold text-primary' : 'text-muted-foreground hover:text-primary')}>
+          <button key={key} type="button" role="tab" aria-selected={tab === key} onClick={() => setTab(key)} className={cn('rounded-pill px-5 py-2.5 transition-colors', tab === key ? 'bg-gold/10 font-semibold text-primary' : 'text-muted-foreground hover:text-primary')}>
             {lbl}
           </button>
         ))}
@@ -135,7 +135,7 @@ export default function ActivityWorkspace({
       {tab === 'threads' ? (
         <div className="grid gap-6 lg:grid-cols-[300px_1fr]">
           {/* Thread list */}
-          <div className="min-w-0 border border-border bg-card">
+          <div className="min-w-0 rounded-card border border-border bg-card shadow-card">
             {threads.length === 0 ? (
               <p className="p-6 text-xs leading-relaxed text-muted-foreground">
                 No threads yet. Start one below{advisorName ? ` — ${advisorName} responds for the Murivest desk` : ''}.
@@ -160,7 +160,7 @@ export default function ActivityWorkspace({
           </div>
 
           {/* Active thread */}
-          <div className="flex min-w-0 flex-col border border-border bg-card">
+          <div className="flex min-w-0 flex-col rounded-card border border-border bg-card shadow-card">
             {thread ? (
               <>
                 <div className="border-b border-border px-6 py-4">
@@ -188,7 +188,7 @@ export default function ActivityWorkspace({
                 </div>
                 <form onSubmit={sendReply} className="border-t border-border p-4">
                   <div className="flex gap-2">
-                    <input className="border border-border bg-background px-4 py-2.5 text-sm focus:border-gold focus:outline-none flex-1" value={reply} onChange={(e) => setReply(e.target.value)} placeholder="Reply to your advisor…" maxLength={4000} />
+                    <input className="rounded-standard border border-border bg-background px-4 py-2.5 text-sm focus:border-primary flex-1" value={reply} onChange={(e) => setReply(e.target.value)} placeholder="Reply to your advisor…" maxLength={4000} />
                     <button type="submit" disabled={busy} className="inline-flex items-center gap-2 bg-primary px-5 py-2.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-primary-foreground hover:bg-forest-deep disabled:opacity-60">
                       {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />} Send
                     </button>
@@ -204,7 +204,7 @@ export default function ActivityWorkspace({
           </div>
 
           {/* New enquiry */}
-          <form onSubmit={newThread} className="border border-border bg-card p-6 lg:col-span-2">
+          <form onSubmit={newThread} className="rounded-card border border-border bg-card shadow-card p-6 lg:col-span-2">
             <h3 className="mb-4 font-display text-lg text-primary">New enquiry to the desk</h3>
             <div className="grid gap-3 sm:grid-cols-[240px_1fr]">
               <label className="block sm:col-span-2">

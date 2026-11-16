@@ -47,6 +47,28 @@
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
+
+  /* ============================================================
+     GEOMETRY & DEPTH TOKENS — 2026 institutional refresh.
+     Radius scale is global and non-negotiable:
+       micro 3px   badges, status chips, tags
+       standard 4–6px  inputs, secondary buttons, utility controls
+       card 16px   cards, panels, document containers, modals
+       pill 9999px  primary CTAs, filter chips, active nav pills
+     Elevation: one soft shadow on elevated/clickable cards;
+     a deeper one only for modals/drawers over a 0.24 backdrop.
+     ============================================================ */
+  --radius-micro: 3px;
+  --radius-standard: 5px;
+  --radius-card: 16px;
+  --radius-pill: 9999px;
+
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.08);
+  --shadow-overlay: 0 4px 12px rgba(0, 0, 0, 0.1);
+  --shadow-sheet: 0 4px 12px rgba(0, 0, 0, 0.1);
+
+  /* Institutional motion curve — used by every CSS transition. */
+  --ease-institutional: cubic-bezier(0.25, 0.1, 0.25, 1);
 }
 
 /* ============================================================
@@ -58,7 +80,9 @@
    ============================================================ */
 
 :root {
-  --radius: 0.25rem; /* sharp, editorial corners — private banking, not SaaS */
+  /* 6px base: rounded-md resolves to 4px, rounded-lg to 6px — the
+     "standard" control band. Containers use --radius-card (16px). */
+  --radius: 0.375rem;
 
   --background: #faf9f6;
   --foreground: #1c2b23;
@@ -138,22 +162,65 @@
   }
   body {
     @apply bg-background text-foreground;
-    font-feature-settings: "ss01" on, "cv11" on;
+    font-feature-settings: "ss01" on, "cv11" on, "tnum" off;
+    -webkit-tap-highlight-color: transparent;
   }
   ::selection {
     background: rgba(184, 149, 107, 0.35);
+  }
+  /* Default interaction cadence for every plain-CSS control. */
+  button, a, input, select, textarea {
+    transition-timing-function: var(--ease-institutional);
+  }
+}
+
+/* Weighted, deliberate motion — nothing bounces, nothing races. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }
 
 @layer utilities {
   .tabular {
     font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1;
+  }
+  /* Tactile press for any clickable surface — scale(0.98), spring return. */
+  .press-scale {
+    transition: transform 200ms var(--ease-institutional);
+  }
+  .press-scale:active {
+    transform: scale(0.98);
+  }
+  /* Card lift — hover translateY(-2px), small timing tier. No shadow explosion. */
+  .card-lift {
+    transition: transform 240ms var(--ease-institutional),
+      box-shadow 240ms var(--ease-institutional),
+      border-color 240ms var(--ease-institutional);
+    will-change: transform;
+  }
+  @media (hover: hover) {
+    .card-lift:hover {
+      transform: translateY(-2px);
+    }
+  }
+  /* Grouped content bands / side rails — cream against a 2–4% tint. */
+  .surface-band {
+    background: #f3f0e9;
   }
   .eyebrow {
     @apply text-[10px] font-medium uppercase tracking-[0.22em] text-muted-foreground;
   }
   .font-display {
     font-family: var(--font-playfair), Georgia, serif;
+  }
+  .font-jost {
+    /* Current sans stack (Inter) — kept verbatim; alias for readability. */
+    font-family: var(--font-inter), system-ui, sans-serif;
   }
   .gold-rule {
     background: linear-gradient(90deg, var(--gold) 0%, rgba(184, 149, 107, 0.25) 100%);

@@ -6,7 +6,7 @@ import {useRouter} from 'next/navigation'
 import {KeyRound, Loader2} from 'lucide-react'
 
 const input =
-  'w-full border border-border bg-background px-4 py-3 text-sm text-foreground focus:border-gold focus:outline-none'
+  'w-full rounded-standard border border-border bg-background px-4 py-3 text-sm text-foreground focus:border-primary'
 const label = 'mb-1.5 block text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground'
 
 export default function ResetPasswordForm() {

@@ -22,7 +22,7 @@ import PortableBlocks from '@/components/portal/PortableBlocks'
 import {MPESA} from '@/lib/constants'
 import {cn} from '@/lib/utils'
 
-const input = 'w-full border border-border bg-background px-4 py-3 text-sm text-foreground focus:border-gold focus:outline-none'
+const input = 'w-full rounded-standard border border-border bg-background px-4 py-3 text-sm text-foreground focus:border-primary'
 const label = 'mb-1.5 block text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground'
 
 export interface OrderRow {
@@ -314,7 +314,7 @@ export default function OrdersWorkspace({briefs, orders, sanityConfigured, prese
         ) : (
           <div className="grid gap-5 lg:grid-cols-2">
             {briefs.map((b) => (
-              <article key={b._id} className="flex flex-col border border-border bg-card p-6 transition-colors hover:border-gold/40">
+              <article key={b._id} className="flex flex-col rounded-card border border-border bg-card shadow-card p-6 transition-colors hover:border-gold/40">
                 <div className="mb-3 flex flex-wrap items-center gap-2">
                   <span className="inline-flex items-center bg-primary px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-primary-foreground">
                     {b.briefType === 'institutional_brief' ? 'Institutional brief' : 'Private brief'}
@@ -368,7 +368,7 @@ export default function OrdersWorkspace({briefs, orders, sanityConfigured, prese
 
       {/* ============ CUSTOM REQUEST ============ */}
       {tab === 'custom' ? (
-        <form onSubmit={submitCustomRequest} className="max-w-2xl space-y-5 border border-border bg-card p-6 lg:p-8">
+        <form onSubmit={submitCustomRequest} className="max-w-2xl space-y-5 rounded-card border border-border bg-card shadow-card p-6 lg:p-8">
           {customNotice ? <div className="border-l-2 border-gold bg-gold/5 px-4 py-3 text-xs leading-relaxed text-primary">{customNotice}</div> : null}
           {customError ? <div className="border-l-2 border-destructive bg-red-50 px-4 py-3 text-xs text-destructive">{customError}</div> : null}
           <div>

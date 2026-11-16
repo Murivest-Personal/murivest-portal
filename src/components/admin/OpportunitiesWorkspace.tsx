@@ -126,7 +126,7 @@ export default function OpportunitiesWorkspace({
             </button>
           ))}
           <input
-            className="ml-0 border border-border bg-background px-3 py-1.5 text-xs focus:border-gold focus:outline-none sm:ml-2"
+            className="ml-0 rounded-standard border border-border bg-background px-3 py-1.5 text-xs focus:border-primary sm:ml-2"
             placeholder="Search title…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
@@ -203,7 +203,7 @@ export default function OpportunitiesWorkspace({
                   <td className="px-3 align-top">
                     {canManage ? (
                       <select
-                        className="border border-border bg-background px-2 py-1 text-xs focus:border-gold focus:outline-none"
+                        className="rounded-standard border border-border bg-background px-2 py-1 text-xs focus:border-primary"
                         value={r.metaVisibilityTier ?? r.accessTier}
                         onChange={(e) => setMeta(r.sanityId, {visibilityTier: e.target.value})}
                         aria-label={`Visibility tier for ${r.title}`}

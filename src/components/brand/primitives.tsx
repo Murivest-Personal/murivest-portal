@@ -16,7 +16,7 @@ export function StatusBadge({status, className}: {status: string; className?: st
   return (
     <span
       className={cn(
-        'inline-flex items-center border px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.14em]',
+        'rounded-micro inline-flex items-center border px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.14em]',
         TONE_CLASSES[tone],
         className,
       )}
@@ -33,7 +33,7 @@ export function TierBadge({tier, className}: {tier: 'tier_1' | 'tier_2' | 'tier_
     tier_3: 'Tier 3 · Institutional',
   } as const
   return (
-    <span className={cn('inline-flex items-center border border-gold/40 bg-gold/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-primary', className)}>
+    <span className={cn('rounded-micro inline-flex items-center border border-gold/40 bg-gold/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-primary', className)}>
       {labels[tier]}
     </span>
   )
@@ -41,13 +41,15 @@ export function TierBadge({tier, className}: {tier: 'tier_1' | 'tier_2' | 'tier_
 
 export function InlineTag({children, className}: {children: React.ReactNode; className?: string}) {
   return (
-    <span className={cn('inline-flex items-center bg-secondary px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.12em] text-secondary-foreground', className)}>
+    <span className={cn('rounded-micro inline-flex items-center bg-secondary px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.12em] text-secondary-foreground', className)}>
       {children}
     </span>
   )
 }
 
-/** Metric tile — the dense financial readout used across the workspace. */
+/** Metric tile — the dense financial readout used across the workspace.
+ *  16px card geometry, one soft shadow, caption → value → supporting
+ *  metadata rhythm, and the quiet -2px hover lift. */
 export function Metric({
   label,
   value,
@@ -64,8 +66,12 @@ export function Metric({
   return (
     <div
       className={cn(
-        'border p-4',
-        tone === 'deep' ? 'border-transparent bg-primary text-primary-foreground' : tone === 'gold' ? 'border-gold/30 bg-gold/5' : 'border-border bg-card',
+        'card-lift rounded-card border p-4 shadow-card',
+        tone === 'deep'
+          ? 'border-transparent bg-primary text-primary-foreground'
+          : tone === 'gold'
+            ? 'border-gold/30 bg-gold/5'
+            : 'border-border bg-card',
         className,
       )}
     >
@@ -91,7 +97,7 @@ export function EmptyState({
   className?: string
 }) {
   return (
-    <div className={cn('border border-dashed border-gold/40 bg-secondary/40 px-6 py-12 text-center', className)}>
+    <div className={cn('rounded-card card-lift border border-dashed border-gold/40 bg-secondary/40 px-6 py-12 text-center shadow-none', className)}>
       {Icon ? <Icon className="mx-auto mb-4 h-10 w-10 text-gold/60" strokeWidth={1.25} /> : null}
       <h3 className="font-display text-xl text-primary">{title}</h3>
       <p className="mx-auto mt-2 max-w-md text-sm leading-relaxed text-muted-foreground">{body}</p>

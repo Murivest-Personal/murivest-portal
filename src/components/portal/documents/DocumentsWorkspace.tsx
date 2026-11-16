@@ -1,14 +1,18 @@
 'use client'
 
-import {useState} from 'react'
+import {useMemo, useState} from 'react'
 import {useRouter} from 'next/navigation'
-import {FileDown, FolderLock, Loader2, Eye, FileStack, ShieldCheck, Send} from 'lucide-react'
+import {AnimatePresence, motion, useReducedMotion} from 'framer-motion'
+import {ChevronDown, FileDown, FolderLock, Loader2, Eye, FileStack, ShieldCheck, Send} from 'lucide-react'
 import {fmtDate, humanizeStatus, relativeTime} from '@/lib/format'
 import {StatusBadge, TierBadge, EmptyState} from '@/components/brand/primitives'
+import {MotionDrawer} from '@/components/brand/motion'
+import {EASE, SPRING, TIMING} from '@/lib/motion'
 import {NDA_VERSION} from '@/lib/constants'
 import {cn} from '@/lib/utils'
 
-const input = 'w-full border border-border bg-background px-4 py-3 text-sm text-foreground focus:border-gold focus:outline-none'
+const input =
+  'rounded-standard w-full border border-border bg-background px-4 py-3 text-sm text-foreground outline-none transition-colors focus:border-primary'
 const label = 'mb-1.5 block text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground'
 
 export interface DocumentRow {
@@ -33,6 +37,29 @@ export interface RequestRow {
   createdAt: string
 }
 
+type PeriodGroup = {key: string; label: string; docs: DocumentRow[]}
+
+/** Documents grouped by reporting period — newest quarter first. */
+function groupByPeriod(docs: DocumentRow[]): PeriodGroup[] {
+  const map = new Map<string, DocumentRow[]>()
+  for (const d of docs) {
+    const when = d.publishDate ? new Date(d.publishDate) : null
+    const key = when && !Number.isNaN(when.getTime())
+      ? `${when.getUTCFullYear()}-Q${Math.floor(when.getUTCMonth() / 3) + 1}`
+      : 'undated'
+    const bucket = map.get(key)
+    if (bucket) bucket.push(d)
+    else map.set(key, [d])
+  }
+  return [...map.entries()]
+    .sort((a, b) => (a[0] < b[0] ? 1 : a[0] > b[0] ? -1 : 0))
+    .map(([key, group]) => ({
+      key,
+      label: key === 'undated' ? 'Unassigned period' : key.replace(/^(\d{4})-Q(\d)$/, 'Quarter $2 · $1'),
+      docs: group,
+    }))
+}
+
 export default function DocumentsWorkspace({
   documents,
   requests,
@@ -47,10 +74,16 @@ export default function DocumentsWorkspace({
   sanityConfigured: boolean
 }) {
   const router = useRouter()
+  const reduce = useReducedMotion()
   const [tab, setTab] = useState<'room' | 'requests'>(documents.length > 0 ? 'room' : 'requests')
   const [ndaOpen, setNdaOpen] = useState(openNda || (!ndaAccepted && documents.some((d) => d.accessTier !== 'tier_1')))
   const [accepting, setAccepting] = useState(false)
   const [ndaError, setNdaError] = useState('')
+
+  // Timeline accordion state — first (current) period open
+  const groups = useMemo(() => groupByPeriod(documents), [documents])
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set(groups.slice(1).map((g) => g.key)))
+  const [previewDoc, setPreviewDoc] = useState<DocumentRow | null>(null)
 
   // Request form
   const [subject, setSubject] = useState('')
@@ -109,20 +142,55 @@ export default function DocumentsWorkspace({
     }
   }
 
+  /** Staggered sequential download of every downloadable file in a period. */
+  function downloadAll(docs: DocumentRow[]) {
+    docs
+      .filter((d) => d.downloadable)
+      .forEach((d, i) => {
+        window.setTimeout(() => {
+          const a = document.createElement('a')
+          a.href = `/api/documents/${encodeURIComponent(d.id)}/file?download=1`
+          a.rel = 'noopener'
+          document.body.appendChild(a)
+          a.click()
+          a.remove()
+        }, i * 350)
+      })
+  }
+
+  function toggleGroup(key: string) {
+    setCollapsed((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
   const docTypeLabel = (t: string) =>
     ({investment_memo: 'Investment memorandum', dd_pack: 'Due-diligence pack', financial_model: 'Financial model', legal: 'Legal', report: 'Report', other: 'Other'}[t] || humanizeStatus(t))
 
   return (
     <div>
-      {/* Tabs */}
-      <div className="mb-6 grid grid-cols-2 border border-border bg-card text-center text-[11px] uppercase tracking-[0.14em]">
+      {/* Pill tab switcher */}
+      <div className="mb-6 inline-flex rounded-pill border border-border bg-card shadow-card p-1" role="tablist">
         {(
           [
             ['room', `Data room (${documents.length})`],
             ['requests', `Requests (${requests.length})`],
           ] as const
         ).map(([key, lbl]) => (
-          <button key={key} type="button" role="tab" aria-selected={tab === key} onClick={() => setTab(key)} className={cn('px-2 py-3 transition-colors', tab === key ? 'bg-gold/10 font-semibold text-primary' : 'text-muted-foreground hover:text-primary')}>
+          <button
+            key={key}
+            type="button"
+            role="tab"
+            aria-selected={tab === key}
+            onClick={() => setTab(key)}
+            className={cn(
+              'rounded-pill px-5 py-2.5 text-[11px] font-medium uppercase tracking-[0.14em] transition-colors duration-200',
+              tab === key ? 'bg-gold/10 font-semibold text-primary' : 'text-muted-foreground hover:text-primary',
+            )}
+          >
             {lbl}
           </button>
         ))}
@@ -130,7 +198,7 @@ export default function DocumentsWorkspace({
 
       {/* NDA gate */}
       {ndaOpen ? (
-        <div className="mb-8 border border-gold/40 bg-card">
+        <div className="rounded-card mb-8 overflow-hidden border border-gold/40 bg-card shadow-card">
           <div className="border-b border-gold/30 bg-gold/5 px-6 py-4">
             <div className="flex items-center gap-2 text-primary">
               <ShieldCheck className="h-5 w-5 text-gold" />
@@ -148,10 +216,17 @@ export default function DocumentsWorkspace({
           {ndaError ? <div className="border-l-2 border-destructive bg-red-50 px-4 py-3 text-xs text-destructive">{ndaError}</div> : null}
           <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-6 py-4">
             <span className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Acceptance is recorded with timestamp, IP and device</span>
-            <button type="button" onClick={acceptNda} disabled={accepting} className="inline-flex items-center gap-2 bg-gold px-6 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-forest-deep transition-colors hover:bg-gold-deep hover:text-ivory disabled:opacity-60">
+            <motion.button
+              type="button"
+              onClick={acceptNda}
+              disabled={accepting}
+              whileTap={accepting ? undefined : {scale: 0.98}}
+              transition={SPRING}
+              className="rounded-pill inline-flex items-center gap-2 bg-gold px-6 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-forest-deep transition-colors hover:bg-gold-deep hover:text-ivory disabled:opacity-60"
+            >
               {accepting ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
               Accept &amp; unlock confidential material
-            </button>
+            </motion.button>
           </div>
         </div>
       ) : null}
@@ -169,62 +244,144 @@ export default function DocumentsWorkspace({
             title="No documents published at your tier"
             body="Data-room material is permission-gated by access tier and, where granted, by specific document grants from your advisor. Raise your verification tier through onboarding and KYC, or request materials directly below."
             action={
-              <button type="button" onClick={() => setTab('requests')} className="inline-flex items-center gap-2 border border-border px-5 py-2.5 text-[11px] uppercase tracking-[0.12em] text-primary hover:border-gold hover:text-gold">
+              <button type="button" onClick={() => setTab('requests')} className="press-scale rounded-standard inline-flex items-center gap-2 border border-border px-5 py-2.5 text-[11px] uppercase tracking-[0.12em] text-primary hover:border-gold hover:text-gold">
                 Request documents
               </button>
             }
           />
         ) : (
-          <ul className="divide-y divide-border border border-border bg-card">
-            {documents.map((d) => (
-              <li key={d.id} className="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
-                <div className="flex min-w-0 items-start gap-3">
-                  <FileStack className="mt-1 h-5 w-5 flex-shrink-0 text-gold/70" />
-                  <div className="min-w-0">
-                    <div className="truncate font-medium text-primary">{d.title}</div>
-                    <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-                      <span>{docTypeLabel(d.docType)}</span>
-                      <TierBadge tier={d.accessTier as 'tier_1' | 'tier_2' | 'tier_3'} />
-                      {d.fileExtension ? <span className="uppercase">{d.fileExtension}</span> : null}
-                      {d.fileSize ? <span>{(d.fileSize / 1024 / 1024).toFixed(1)} MB</span> : null}
-                      {d.publishDate ? <span>filed {fmtDate(d.publishDate)}</span> : null}
+          /* Reporting-period timeline — soft accordion on a curved gold spine. */
+          <div className="relative">
+            <motion.div
+              aria-hidden="true"
+              className="absolute bottom-8 left-[15px] top-8 w-px bg-gradient-to-b from-gold/60 via-gold/30 to-transparent"
+              initial={reduce ? undefined : {scaleY: 0}}
+              animate={reduce ? undefined : {scaleY: 1}}
+              transition={{duration: TIMING.cinematic, ease: EASE}}
+              style={{transformOrigin: 'top'}}
+            />
+            <ol className="space-y-4">
+              {groups.map((g) => {
+                const isCollapsed = collapsed.has(g.key)
+                const downloadableCount = g.docs.filter((d) => d.downloadable).length
+                return (
+                  <li key={g.key} className="relative pl-10">
+                    <span aria-hidden="true" className="absolute left-[10px] top-[26px] z-10 h-[11px] w-[11px] rounded-pill border-2 border-gold bg-background" />
+                    <div className="rounded-card border border-border bg-card shadow-card">
+                      <button
+                        type="button"
+                        onClick={() => toggleGroup(g.key)}
+                        aria-expanded={!isCollapsed}
+                        className="flex w-full items-center justify-between gap-3 px-5 py-4 text-left"
+                      >
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                            <span className="font-display text-lg leading-tight text-primary">{g.label}</span>
+                            <span className="rounded-micro inline-flex items-center bg-secondary px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.12em] text-secondary-foreground">
+                              {g.docs.length} {g.docs.length === 1 ? 'document' : 'documents'}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="flex flex-shrink-0 items-center gap-2">
+                          {downloadableCount > 0 ? (
+                            <motion.button
+                              type="button"
+                              whileTap={{scale: 0.98}}
+                              transition={SPRING}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                downloadAll(g.docs)
+                              }}
+                              className="rounded-pill inline-flex items-center gap-1.5 bg-primary px-4 py-2 text-[10px] font-medium uppercase tracking-[0.12em] text-primary-foreground transition-colors hover:bg-primary/90"
+                            >
+                              <FileDown className="h-3.5 w-3.5" /> Download all
+                            </motion.button>
+                          ) : null}
+                          <span className="flex h-8 w-8 items-center justify-center text-muted-foreground">
+                            <motion.span animate={{rotate: isCollapsed ? 0 : 180}} transition={SPRING} className="flex">
+                              <ChevronDown className="h-4 w-4" strokeWidth={2} />
+                            </motion.span>
+                          </span>
+                        </div>
+                      </button>
+                      <AnimatePresence initial={false}>
+                        {!isCollapsed ? (
+                          <motion.div
+                            key="content"
+                            initial={reduce ? {opacity: 0} : {height: 0, opacity: 0}}
+                            animate={reduce ? {opacity: 1} : {height: 'auto', opacity: 1}}
+                            exit={reduce ? {opacity: 0} : {height: 0, opacity: 0}}
+                            transition={reduce ? {duration: TIMING.micro} : {height: {...SPRING}, opacity: {duration: TIMING.small, ease: EASE}}}
+                            className="overflow-hidden"
+                          >
+                            <ul className="divide-y divide-border border-t border-border">
+                              {g.docs.map((d) => (
+                                <li key={d.id} className="group flex flex-col gap-3 px-5 py-4 transition-colors duration-200 hover:bg-secondary/50 sm:flex-row sm:items-center sm:justify-between">
+                                  <div className="flex min-w-0 items-start gap-3">
+                                    <FileStack className="mt-1 h-5 w-5 flex-shrink-0 text-gold/70" />
+                                    <div className="min-w-0">
+                                      <button
+                                        type="button"
+                                        onClick={() => setPreviewDoc(d)}
+                                        className="truncate text-left font-medium text-primary transition-colors hover:text-gold"
+                                      >
+                                        {d.title}
+                                      </button>
+                                      <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+                                        <span>{docTypeLabel(d.docType)}</span>
+                                        <TierBadge tier={d.accessTier as 'tier_1' | 'tier_2' | 'tier_3'} />
+                                        {d.fileExtension ? <span className="uppercase">{d.fileExtension}</span> : null}
+                                        {d.fileSize ? <span>{(d.fileSize / 1024 / 1024).toFixed(1)} MB</span> : null}
+                                        {d.publishDate ? <span>filed {fmtDate(d.publishDate)}</span> : null}
+                                      </div>
+                                      {d.description ? <p className="mt-1 line-clamp-1 text-xs text-muted-foreground">{d.description}</p> : null}
+                                    </div>
+                                  </div>
+                                  <div className="flex flex-shrink-0 gap-1">
+                                    <button
+                                      type="button"
+                                      onClick={() => setPreviewDoc(d)}
+                                      className="rounded-standard inline-flex items-center gap-1.5 px-3 py-2 text-[10px] uppercase tracking-[0.12em] text-primary transition-colors hover:bg-accent"
+                                    >
+                                      <Eye className="h-3.5 w-3.5" /> Preview
+                                    </button>
+                                    {d.downloadable ? (
+                                      <a
+                                        href={`/api/documents/${encodeURIComponent(d.id)}/file?download=1`}
+                                        rel="noreferrer noopener"
+                                        className="rounded-standard inline-flex items-center gap-1.5 px-3 py-2 text-[10px] font-medium uppercase tracking-[0.12em] text-primary transition-colors hover:bg-accent"
+                                      >
+                                        <FileDown className="h-3.5 w-3.5" /> Download
+                                      </a>
+                                    ) : (
+                                      <span
+                                        className="rounded-standard inline-flex items-center gap-1.5 px-3 py-2 text-[10px] uppercase tracking-[0.12em] text-muted-foreground/60"
+                                        title="In-portal preview only — the desk controls downloads"
+                                      >
+                                        Preview only
+                                      </span>
+                                    )}
+                                  </div>
+                                </li>
+                              ))}
+                            </ul>
+                          </motion.div>
+                        ) : null}
+                      </AnimatePresence>
                     </div>
-                    {d.description ? <p className="mt-1 line-clamp-1 text-xs text-muted-foreground">{d.description}</p> : null}
-                  </div>
-                </div>
-                <div className="flex flex-shrink-0 gap-2">
-                  <a
-                    href={`/api/documents/${encodeURIComponent(d.id)}/file`}
-                    target="_blank"
-                    rel="noreferrer noopener"
-                    className="inline-flex items-center gap-1.5 border border-border px-3.5 py-2 text-[10px] uppercase tracking-[0.12em] text-primary transition-colors hover:border-gold hover:text-gold"
-                  >
-                    <Eye className="h-3.5 w-3.5" /> Preview
-                  </a>
-                  {d.downloadable ? (
-                    <a
-                      href={`/api/documents/${encodeURIComponent(d.id)}/file?download=1`}
-                      className="inline-flex items-center gap-1.5 border border-primary bg-primary px-3.5 py-2 text-[10px] font-medium uppercase tracking-[0.12em] text-primary-foreground transition-colors hover:bg-forest-deep"
-                    >
-                      <FileDown className="h-3.5 w-3.5" /> Download
-                    </a>
-                  ) : (
-                    <span className="inline-flex items-center gap-1.5 border border-border px-3.5 py-2 text-[10px] uppercase tracking-[0.12em] text-muted-foreground/60" title="In-portal preview only — the desk controls downloads">
-                      Preview only
-                    </span>
-                  )}
-                </div>
-              </li>
-            ))}
-          </ul>
+                  </li>
+                )
+              })}
+            </ol>
+          </div>
         )
       ) : (
         <div className="grid gap-6 lg:grid-cols-[1.3fr_1fr]">
           {/* Request form */}
-          <form onSubmit={submitRequest} className="min-w-0 space-y-4 border border-border bg-card p-6">
+          <form onSubmit={submitRequest} className="rounded-card min-w-0 space-y-4 border border-border bg-card p-6 shadow-card">
             <h3 className="font-display text-xl text-primary">Request materials</h3>
-            {notice ? <div className="border-l-2 border-gold bg-gold/5 px-4 py-3 text-xs text-primary">{notice}</div> : null}
-            {error ? <div className="border-l-2 border-destructive bg-red-50 px-4 py-3 text-xs text-destructive">{error}</div> : null}
+            {notice ? <div className="rounded-micro border-l-2 border-gold bg-gold/5 px-4 py-3 text-xs text-primary">{notice}</div> : null}
+            {error ? <div className="rounded-micro border-l-2 border-destructive bg-red-50 px-4 py-3 text-xs text-destructive">{error}</div> : null}
             <label className="block">
               <span className={label}>Subject</span>
               <input className={input} value={subject} onChange={(e) => setSubject(e.target.value)} maxLength={200} placeholder="e.g. Data room for Westlands office asset" />
@@ -243,14 +400,20 @@ export default function DocumentsWorkspace({
               <span className={label}>Detail</span>
               <textarea className={`${input} min-h-24`} value={detail} onChange={(e) => setDetail(e.target.value)} maxLength={4000} placeholder="Asset, pack or file you need; intended use; any timing constraints…" />
             </label>
-            <button type="submit" disabled={busy} className="inline-flex items-center gap-2 bg-primary px-6 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-primary-foreground hover:bg-forest-deep disabled:opacity-60">
+            <motion.button
+              type="submit"
+              disabled={busy}
+              whileTap={busy ? undefined : {scale: 0.98}}
+              transition={SPRING}
+              className="rounded-pill inline-flex items-center gap-2 bg-primary px-6 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-primary-foreground transition-colors hover:bg-forest-deep disabled:opacity-60"
+            >
               {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
               Submit request
-            </button>
+            </motion.button>
           </form>
 
           {/* Request history */}
-          <div className="min-w-0 border border-border bg-card p-6">
+          <div className="rounded-card min-w-0 border border-border bg-card p-6 shadow-card">
             <h3 className="mb-4 font-display text-xl text-primary">Your requests</h3>
             {requests.length === 0 ? (
               <p className="text-xs leading-relaxed text-muted-foreground">No requests yet. Every request is tracked — status, history and delivery appear here and in Activity.</p>
@@ -272,6 +435,45 @@ export default function DocumentsWorkspace({
           </div>
         </div>
       )}
+
+      {/* Document preview — right-side spring drawer */}
+      <MotionDrawer
+        open={previewDoc != null}
+        onClose={() => setPreviewDoc(null)}
+        eyebrow={previewDoc ? docTypeLabel(previewDoc.docType) : undefined}
+        title={previewDoc?.title}
+        widthClass="max-w-2xl"
+        footer={
+          previewDoc?.downloadable ? (
+            <a
+              href={`/api/documents/${encodeURIComponent(previewDoc.id)}/file?download=1`}
+              rel="noreferrer noopener"
+              className="press-scale rounded-pill inline-flex items-center gap-2 bg-primary px-6 py-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-primary-foreground transition-colors hover:bg-primary/90"
+            >
+              <FileDown className="h-4 w-4" /> Download this document
+            </a>
+          ) : (
+            <span className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">In-portal preview only — the desk controls downloads</span>
+          )
+        }
+      >
+        {previewDoc ? (
+          <div className="space-y-4">
+            {previewDoc.description ? <p className="text-sm leading-relaxed text-muted-foreground">{previewDoc.description}</p> : null}
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+              <TierBadge tier={previewDoc.accessTier as 'tier_1' | 'tier_2' | 'tier_3'} />
+              {previewDoc.fileExtension ? <span className="uppercase">{previewDoc.fileExtension}</span> : null}
+              {previewDoc.fileSize ? <span>{(previewDoc.fileSize / 1024 / 1024).toFixed(1)} MB</span> : null}
+              {previewDoc.publishDate ? <span>filed {fmtDate(previewDoc.publishDate)}</span> : null}
+            </div>
+            <iframe
+              src={`/api/documents/${encodeURIComponent(previewDoc.id)}/file`}
+              title={`${previewDoc.title} preview`}
+              className="min-h-[60vh] w-full rounded-standard border border-border bg-white"
+            />
+          </div>
+        ) : null}
+      </MotionDrawer>
     </div>
   )
 }

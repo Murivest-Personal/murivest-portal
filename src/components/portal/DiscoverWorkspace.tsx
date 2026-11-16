@@ -23,7 +23,7 @@ const SEGMENTS = [
   {key: 'high_interest', label: 'High interest'},
 ] as const
 
-const selectCls = 'border border-border bg-card px-3 py-2 text-xs text-foreground focus:border-gold focus:outline-none'
+const selectCls = 'rounded-standard border border-border bg-card px-3 py-2 text-xs text-foreground transition-colors focus:border-primary'
 
 export default function DiscoverWorkspace({
   items,
@@ -113,14 +113,14 @@ export default function DiscoverWorkspace({
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search title, market, district…"
               aria-label="Search opportunities"
-              className="border border-border bg-card py-2 pl-9 pr-3 text-xs text-foreground placeholder:text-muted-foreground/60 focus:border-gold focus:outline-none"
+              className="rounded-standard border border-border bg-card py-2 pl-9 pr-3 text-xs text-foreground outline-none transition-colors placeholder:text-muted-foreground/60 focus:border-primary"
             />
           </div>
           <button
             type="button"
             onClick={() => setShowFilters((v) => !v)}
             aria-expanded={showFilters}
-            className="relative inline-flex items-center gap-2 border border-border bg-card px-3.5 py-2 text-[11px] uppercase tracking-[0.12em] text-primary hover:border-gold hover:text-gold"
+            className="press-scale rounded-standard relative inline-flex items-center gap-2 border border-border bg-card px-3.5 py-2 text-[11px] uppercase tracking-[0.12em] text-primary transition-colors hover:border-gold hover:text-gold"
           >
             <SlidersHorizontal className="h-3.5 w-3.5" />
             Filters
@@ -133,7 +133,7 @@ export default function DiscoverWorkspace({
 
       {/* Filters */}
       {showFilters ? (
-        <div className="mb-6 grid gap-3 border border-border bg-card p-4 sm:grid-cols-3 lg:grid-cols-6">
+        <div className="mb-6 grid gap-3 rounded-card border border-border bg-card shadow-card p-4 sm:grid-cols-3 lg:grid-cols-6">
           <label className="block">
             <span className="mb-1 block text-[9px] uppercase tracking-[0.14em] text-muted-foreground">Status</span>
             <select className={cn(selectCls, 'w-full')} value={status} onChange={(e) => setStatus(e.target.value)}>

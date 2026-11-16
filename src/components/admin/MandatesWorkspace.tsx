@@ -184,7 +184,7 @@ export default function MandatesWorkspace({
                 <td className="px-3 align-top">
                   {canManage ? (
                     <select
-                      className="border border-border bg-background px-2 py-1 text-xs focus:border-gold focus:outline-none"
+                      className="rounded-standard border border-border bg-background px-2 py-1 text-xs focus:border-primary"
                       value={m.stage}
                       onChange={(e) => update(m.id, {stage: e.target.value})}
                       disabled={busyId === m.id}
@@ -222,7 +222,7 @@ export default function MandatesWorkspace({
                 <td className="px-3 align-top">
                   {canManage ? (
                     <select
-                      className="border border-border bg-background px-2 py-1 text-xs focus:border-gold focus:outline-none"
+                      className="rounded-standard border border-border bg-background px-2 py-1 text-xs focus:border-primary"
                       value={m.advisorId ?? ''}
                       onChange={(e) => update(m.id, {advisorId: e.target.value || null})}
                       disabled={busyId === m.id}
@@ -265,7 +265,7 @@ export default function MandatesWorkspace({
 
 function Tile({label, value}: {label: string; value: string}) {
   return (
-    <div className="border border-border bg-card p-4">
+    <div className="rounded-card border border-border bg-card shadow-card p-4">
       <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">{label}</div>
       <div className="mt-1 font-display text-xl text-primary tabular-nums">{value}</div>
     </div>

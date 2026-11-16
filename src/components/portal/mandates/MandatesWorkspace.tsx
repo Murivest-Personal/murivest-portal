@@ -8,7 +8,7 @@ import {StatusBadge, EmptyState} from '@/components/brand/primitives'
 import {CURRENCY_OPTIONS, ASSET_CLASS_OPTIONS, GEO_OPTIONS} from '@/lib/constants'
 import {cn} from '@/lib/utils'
 
-const input = 'w-full border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:border-gold focus:outline-none'
+const input = 'w-full rounded-standard border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:border-primary'
 const label = 'mb-1.5 block text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground'
 
 export interface MandateRow {
@@ -256,7 +256,7 @@ export default function MandatesWorkspace({mandates}: {mandates: MandateRow[]}) 
           {mandates.map((m) => {
             const open = expanded === m.id
             return (
-              <article key={m.id} className="border border-border bg-card">
+              <article key={m.id} className="rounded-card border border-border bg-card shadow-card">
                 <button type="button" onClick={() => setExpanded(open ? null : m.id)} className="flex w-full flex-col gap-3 p-6 text-left lg:flex-row lg:items-center lg:justify-between">
                   <div className="min-w-0">
                     <div className="mb-1.5 flex flex-wrap items-center gap-2">

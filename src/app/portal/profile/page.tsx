@@ -39,7 +39,7 @@ export default async function ProfilePage() {
 
       {/* Verification state */}
       <section className="mb-8 grid gap-6 lg:grid-cols-[1.4fr_1fr]">
-        <div className="border border-border bg-card p-6">
+        <div className="rounded-card border border-border bg-card shadow-card p-6">
           <h2 className="mb-4 font-display text-xl text-primary">Classification &amp; verification</h2>
           <dl className="grid gap-x-8 gap-y-4 sm:grid-cols-2">
             <div>
@@ -84,7 +84,7 @@ export default async function ProfilePage() {
           </p>
         </div>
 
-        <div className="border border-border bg-card p-6">
+        <div className="rounded-card border border-border bg-card shadow-card p-6">
           <h2 className="mb-4 font-display text-xl text-primary">Advisor</h2>
           {profile?.advisorId ? (
             (() => {

@@ -16,7 +16,7 @@ export type Mode = 'signin' | 'register' | 'access'
 type Intent = 'individual' | 'uhnwi' | 'institutional_rep'
 
 const input =
-  'w-full border border-border bg-background px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground/70 focus:border-gold focus:outline-none'
+  'w-full rounded-standard border border-border bg-background px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground/70 focus:border-primary'
 const label = 'mb-1.5 block text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground'
 
 export default function AuthModal({

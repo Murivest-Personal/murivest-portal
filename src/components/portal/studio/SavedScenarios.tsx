@@ -82,7 +82,7 @@ export default function SavedScenarios({initial}: {initial: SavedScenarioRow[]})
   }
 
   return (
-    <div className="overflow-x-auto border border-border bg-card">
+    <div className="overflow-x-auto rounded-card border border-border bg-card shadow-card">
       <table className="w-full min-w-200 text-sm">
         <thead>
           <tr className="border-b border-border text-left text-[10px] uppercase tracking-[0.14em] text-muted-foreground">

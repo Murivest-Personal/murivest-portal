@@ -216,7 +216,7 @@ export default function SettingsWorkspace({initial}: {initial: SettingsData}) {
                     <td className="px-3 align-top">
                       <div className="flex flex-wrap gap-1.5">
                         <select
-                          className="border border-border bg-background px-2 py-1 text-xs focus:border-gold focus:outline-none"
+                          className="rounded-standard border border-border bg-background px-2 py-1 text-xs focus:border-primary"
                           value={s.adminRole}
                           onChange={async (e) => {
                             const okRun = await run('staff.update', {userId: s.userId, adminRole: e.target.value}, `Role updated to ${e.target.value}.`)

@@ -198,11 +198,11 @@ export default function NotificationBell({settingsHref = '/portal/notifications'
         onClick={() => setOpen((v) => !v)}
         aria-label={`Notifications${unread ? ` (${unread} unread)` : ''}`}
         aria-expanded={open}
-        className="relative inline-flex h-9 w-9 items-center justify-center border border-border text-primary transition-colors hover:border-gold hover:text-gold"
+        className="press-scale rounded-standard relative inline-flex h-9 w-9 items-center justify-center border border-border text-primary transition-colors hover:border-gold hover:text-gold"
       >
         <Bell className="h-4 w-4" />
         {unread > 0 ? (
-          <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center bg-gold px-1 text-[9px] font-bold text-forest-deep">
+          <span className="rounded-pill absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center bg-gold px-1 text-[9px] font-bold text-forest-deep">
             {unread > 9 ? '9+' : unread}
           </span>
         ) : null}
@@ -211,7 +211,7 @@ export default function NotificationBell({settingsHref = '/portal/notifications'
       {open ? (
         <>
           <button type="button" aria-label="Close notifications" className="fixed inset-0 z-40 cursor-default" onClick={() => setOpen(false)} />
-          <div className="absolute right-5 top-[4.5rem] z-50 w-80 max-w-[calc(100vw-2.5rem)] border border-border bg-card shadow-xl sm:w-96">
+          <div className="rounded-card absolute right-5 top-[4.5rem] z-50 w-80 max-w-[calc(100vw-2.5rem)] border border-border bg-card shadow-overlay sm:w-96">
             <div className="flex items-center justify-between border-b border-border px-4 py-3">
               <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-primary">Notifications</span>
               <div className="flex items-center gap-3">

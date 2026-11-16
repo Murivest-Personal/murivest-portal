@@ -2,14 +2,18 @@
 
 import {useState} from 'react'
 import {useRouter} from 'next/navigation'
+import {AnimatePresence, motion, useReducedMotion} from 'framer-motion'
 import {Briefcase, Loader2, Plus, Trash2, Calculator} from 'lucide-react'
 import Link from 'next/link'
 import {fmtMoney, fmtPct, fmtDate, fmtRatio, humanizeStatus} from '@/lib/format'
 import {StatusBadge, Metric, EmptyState} from '@/components/brand/primitives'
+import {StaggerGroup, StaggerItem} from '@/components/brand/motion'
+import {EASE, SPRING, TIMING} from '@/lib/motion'
 import {CURRENCY_OPTIONS, ASSET_CLASS_OPTIONS} from '@/lib/constants'
 import {cn} from '@/lib/utils'
 
-const input = 'w-full border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:border-gold focus:outline-none'
+const input =
+  'rounded-standard w-full border border-border bg-background px-3 py-2.5 text-sm text-foreground outline-none transition-colors focus:border-primary'
 const label = 'mb-1.5 block text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground'
 
 export interface CapitalCallRow {
@@ -48,6 +52,7 @@ export interface PositionRow {
 
 export default function PortfolioWorkspace({positions}: {positions: PositionRow[]}) {
   const router = useRouter()
+  const reduce = useReducedMotion()
   const [creating, setCreating] = useState(positions.length === 0)
   const [expanded, setExpanded] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -163,26 +168,46 @@ export default function PortfolioWorkspace({positions}: {positions: PositionRow[
     <div className="space-y-8">
       {/* Snapshot */}
       {positions.length > 0 ? (
-        <div className="grid gap-px border border-border bg-border sm:grid-cols-2 lg:grid-cols-4">
-          <Metric label="Positions held" value={String(held.length)} sub={`${positions.length - held.length} exited`} />
-          <Metric label="Equity deployed (actual)" value={fmtMoney(totalEquity || null, 'USD', {compact: true})} sub="as recorded" tone="gold" />
-          <Metric label="Portfolio NOI (annual)" value={fmtMoney(totalNoi || null, 'USD', {compact: true})} sub={portfolioYield != null ? `${fmtPct(portfolioYield)} of valuation` : 'valuation not stated'} />
-          <Metric label="Open capital calls" value={String(openCalls.length)} sub={openCalls.length ? 'attention required' : 'none outstanding'} tone={openCalls.length ? 'deep' : 'default'} />
-        </div>
+        <StaggerGroup className="grid gap-px rounded-card border border-border bg-border shadow-card sm:grid-cols-2 lg:grid-cols-4" gap={0.05}>
+          <StaggerItem className="bg-card">
+            <Metric label="Positions held" value={String(held.length)} sub={`${positions.length - held.length} exited`} className="rounded-none border-0 shadow-none" />
+          </StaggerItem>
+          <StaggerItem className="bg-card">
+            <Metric label="Equity deployed (actual)" value={fmtMoney(totalEquity || null, 'USD', {compact: true})} sub="as recorded" tone="gold" className="rounded-none border-0 shadow-none" />
+          </StaggerItem>
+          <StaggerItem className="bg-card">
+            <Metric label="Portfolio NOI (annual)" value={fmtMoney(totalNoi || null, 'USD', {compact: true})} sub={portfolioYield != null ? `${fmtPct(portfolioYield)} of valuation` : 'valuation not stated'} className="rounded-none border-0 shadow-none" />
+          </StaggerItem>
+          <StaggerItem className="bg-card">
+            <Metric label="Open capital calls" value={String(openCalls.length)} sub={openCalls.length ? 'attention required' : 'none outstanding'} tone={openCalls.length ? 'deep' : 'default'} className="rounded-none border-0 shadow-none" />
+          </StaggerItem>
+        </StaggerGroup>
       ) : null}
 
       <div className="flex items-center justify-between">
         <span className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">{positions.length} position{positions.length === 1 ? '' : 's'} · actual performance, distinct from pipeline analysis</span>
-        <button type="button" onClick={() => setCreating((v) => !v)} className="inline-flex items-center gap-2 bg-primary px-5 py-2.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-primary-foreground hover:bg-forest-deep">
+        <motion.button
+          type="button"
+          onClick={() => setCreating((v) => !v)}
+          whileTap={{scale: 0.98}}
+          transition={SPRING}
+          className="rounded-pill inline-flex items-center gap-2 bg-primary px-5 py-2.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-primary-foreground shadow-card transition-colors hover:bg-forest-deep"
+        >
           <Plus className="h-4 w-4" /> Record a position
-        </button>
+        </motion.button>
       </div>
 
       {/* ============ CREATE ============ */}
       {creating ? (
-        <form onSubmit={create} className="border border-gold/40 bg-card p-6 lg:p-8">
+        <motion.form
+          onSubmit={create}
+          initial={reduce ? {opacity: 0} : {opacity: 0, y: 12}}
+          animate={reduce ? {opacity: 1} : {opacity: 1, y: 0}}
+          transition={{duration: TIMING.small, ease: EASE}}
+          className="rounded-card border border-gold/40 bg-card p-6 shadow-card lg:p-8"
+        >
           <h3 className="mb-5 font-display text-xl text-primary">Record an owned or committed position</h3>
-          {error ? <div className="mb-4 border-l-2 border-destructive bg-red-50 px-4 py-3 text-xs text-destructive">{error}</div> : null}
+          {error ? <div className="rounded-micro mb-4 border-l-2 border-destructive bg-red-50 px-4 py-3 text-xs text-destructive">{error}</div> : null}
           <p className="mb-5 max-w-xl text-xs leading-relaxed text-muted-foreground">
             Actuals only. Figures you record here are actual deployed capital, income and expenses — never projections (those live in the Investment Studio, labelled illustrative).
           </p>
@@ -273,14 +298,20 @@ export default function PortfolioWorkspace({positions}: {positions: PositionRow[
             </label>
           </div>
           <div className="mt-6 flex justify-end gap-3 border-t border-border pt-5">
-            <button type="button" onClick={() => setCreating(false)} className="border border-border px-5 py-3 text-xs uppercase tracking-[0.14em] text-primary hover:border-gold hover:text-gold">
+            <button type="button" onClick={() => setCreating(false)} className="press-scale rounded-standard border-[1.5px] border-border px-5 py-3 text-xs uppercase tracking-[0.14em] text-primary transition-colors hover:border-gold hover:text-gold">
               Cancel
             </button>
-            <button type="submit" disabled={busy} className="inline-flex items-center gap-2 bg-primary px-6 py-3 text-xs font-semibold uppercase tracking-[0.14em] text-primary-foreground hover:bg-forest-deep disabled:opacity-60">
+            <motion.button
+              type="submit"
+              disabled={busy}
+              whileTap={busy ? undefined : {scale: 0.98}}
+              transition={SPRING}
+              className="rounded-pill inline-flex items-center gap-2 bg-primary px-6 py-3 text-xs font-semibold uppercase tracking-[0.14em] text-primary-foreground shadow-card transition-colors hover:bg-forest-deep disabled:opacity-60"
+            >
               {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null} Record position
-            </button>
+            </motion.button>
           </div>
-        </form>
+        </motion.form>
       ) : null}
 
       {/* ============ LIST ============ */}
@@ -298,7 +329,13 @@ export default function PortfolioWorkspace({positions}: {positions: PositionRow[
             const yieldOnCost = p.purchasePrice && noi ? (noi / p.purchasePrice) * 100 : null
             const equityMultiple = p.equityDeployed && p.valuation ? p.valuation / p.equityDeployed : null
             return (
-              <article key={p.id} className="border border-border bg-card">
+              <motion.article
+                key={p.id}
+                initial={reduce ? {opacity: 0} : {opacity: 0, y: 10}}
+                animate={reduce ? {opacity: 1} : {opacity: 1, y: 0}}
+                transition={{duration: TIMING.small, ease: EASE}}
+                className="rounded-card border border-border bg-card shadow-card"
+              >
                 <button type="button" onClick={() => setExpanded(open ? null : p.id)} className="flex w-full flex-col gap-3 p-6 text-left lg:flex-row lg:items-center lg:justify-between">
                   <div className="min-w-0">
                     <div className="mb-1.5 flex items-center gap-2">
@@ -329,7 +366,16 @@ export default function PortfolioWorkspace({positions}: {positions: PositionRow[
                 </button>
 
                 {open ? (
-                  <div className="border-t border-border p-6">
+                  <AnimatePresence initial={false}>
+                    <motion.div
+                      key="detail"
+                      initial={reduce ? {opacity: 0} : {height: 0, opacity: 0}}
+                      animate={reduce ? {opacity: 1} : {height: 'auto', opacity: 1}}
+                      exit={reduce ? {opacity: 0} : {height: 0, opacity: 0}}
+                      transition={reduce ? {duration: TIMING.micro} : {height: {...SPRING}, opacity: {duration: TIMING.small, ease: EASE}}}
+                      className="overflow-hidden"
+                    >
+                      <div className="border-t border-border p-6">
                     <div className="grid gap-6 lg:grid-cols-3">
                       <div className="lg:col-span-2">
                         <div className="eyebrow mb-3">Asset-level detail</div>
@@ -382,7 +428,7 @@ export default function PortfolioWorkspace({positions}: {positions: PositionRow[
                         ) : (
                           <ul className="space-y-2.5">
                             {p.capitalCalls.map((c) => (
-                              <li key={c.id} className="flex items-center justify-between gap-3 border border-border px-3 py-2">
+                              <li key={c.id} className="rounded-micro flex items-center justify-between gap-3 border border-border px-3 py-2">
                                 <div className="min-w-0">
                                   <div className="truncate text-xs font-medium text-primary">{c.label}</div>
                                   <div className="tabular text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
@@ -391,12 +437,12 @@ export default function PortfolioWorkspace({positions}: {positions: PositionRow[
                                 </div>
                                 <div className="flex flex-shrink-0 items-center gap-1.5">
                                   {c.status === 'scheduled' ? (
-                                    <button type="button" disabled={callBusy === c.id} onClick={() => advanceCall(c, 'called')} className="border border-border px-2 py-1 text-[9px] uppercase tracking-[0.1em] text-primary hover:border-gold hover:text-gold">
+                                    <button type="button" disabled={callBusy === c.id} onClick={() => advanceCall(c, 'called')} className="rounded-micro border border-border px-2 py-1 text-[9px] uppercase tracking-[0.1em] text-primary transition-colors hover:border-gold hover:text-gold">
                                       Called
                                     </button>
                                   ) : null}
                                   {c.status === 'called' ? (
-                                    <button type="button" disabled={callBusy === c.id} onClick={() => advanceCall(c, 'paid')} className="border border-gold bg-gold/10 px-2 py-1 text-[9px] uppercase tracking-[0.1em] text-primary hover:bg-gold/20">
+                                    <button type="button" disabled={callBusy === c.id} onClick={() => advanceCall(c, 'paid')} className="rounded-micro border border-gold bg-gold/10 px-2 py-1 text-[9px] uppercase tracking-[0.1em] text-primary transition-colors hover:bg-gold/20">
                                       Paid
                                     </button>
                                   ) : null}
@@ -407,7 +453,7 @@ export default function PortfolioWorkspace({positions}: {positions: PositionRow[
                           </ul>
                         )}
                         <div className="mt-5 border-t border-border pt-4">
-                          <Link href={`/portal/studio?opportunity=${encodeURIComponent(p.sanityOpportunityId || '')}`} className="inline-flex items-center gap-2 border border-gold/60 bg-gold/10 px-4 py-2 text-[10px] font-medium uppercase tracking-[0.12em] text-primary hover:bg-gold/20">
+                          <Link href={`/portal/studio?opportunity=${encodeURIComponent(p.sanityOpportunityId || '')}`} className="press-scale rounded-pill inline-flex items-center gap-2 border border-gold/60 bg-gold/10 px-4 py-2 text-[10px] font-medium uppercase tracking-[0.12em] text-primary transition-colors hover:bg-gold/20">
                             <Calculator className="h-3.5 w-3.5" /> Plan the exit in Studio
                           </Link>
                         </div>
@@ -415,13 +461,15 @@ export default function PortfolioWorkspace({positions}: {positions: PositionRow[
                     </div>
 
                     <div className="mt-6 flex justify-end border-t border-border pt-4">
-                      <button type="button" onClick={() => remove(p.id)} className="inline-flex items-center gap-1.5 border border-border px-4 py-2 text-[10px] uppercase tracking-[0.12em] text-muted-foreground hover:border-destructive hover:text-destructive">
+                      <button type="button" onClick={() => remove(p.id)} className="rounded-standard inline-flex items-center gap-1.5 border-[1.5px] border-border px-4 py-2 text-[10px] uppercase tracking-[0.12em] text-muted-foreground transition-colors hover:border-destructive hover:text-destructive">
                         <Trash2 className="h-3.5 w-3.5" /> Remove record
                       </button>
                     </div>
-                  </div>
+                      </div>
+                    </motion.div>
+                  </AnimatePresence>
                 ) : null}
-              </article>
+              </motion.article>
             )
           })}
         </div>

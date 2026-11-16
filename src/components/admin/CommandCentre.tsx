@@ -217,10 +217,10 @@ function QuickAction({href, label, badge}: {href: string; label: string; badge: 
   return (
     <Link
       href={href}
-      className="group flex items-center justify-between gap-2 border border-border bg-card px-4 py-3 text-sm text-primary transition-colors hover:border-gold hover:bg-accent/40"
+      className="press-scale rounded-standard group flex items-center justify-between gap-2 border border-border bg-card px-4 py-3 text-sm text-primary transition-colors hover:border-gold hover:bg-accent/40"
     >
       <span>{label}</span>
-      <span className="inline-flex h-6 min-w-6 items-center justify-center bg-primary px-1.5 text-[11px] font-medium tabular-nums text-primary-foreground">{badge}</span>
+      <span className="rounded-micro inline-flex h-6 min-w-6 items-center justify-center bg-primary px-1.5 text-[11px] font-medium tabular-nums text-primary-foreground">{badge}</span>
     </Link>
   )
 }

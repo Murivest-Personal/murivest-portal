@@ -125,7 +125,7 @@ export default function InstallAppButton({variant = 'compact'}: {variant?: 'comp
           <span className="hidden text-[10px] font-semibold uppercase tracking-[0.14em] sm:inline">{busy ? 'Installing…' : 'Install app'}</span>
         </button>
         {ios && hintOpen ? (
-          <div className="absolute right-5 top-[4.5rem] z-50 w-80 max-w-[calc(100vw-2.5rem)] border border-border bg-card p-4 shadow-xl">
+          <div className="absolute right-5 top-[4.5rem] z-50 w-80 max-w-[calc(100vw-2.5rem)] rounded-card border border-border bg-card shadow-card p-4 shadow-xl">
             <IosInstructions onClose={() => setHintOpen(false)} />
           </div>
         ) : null}

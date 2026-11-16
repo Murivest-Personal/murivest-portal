@@ -187,7 +187,7 @@ export default function NotificationSettings({email}: {email: string}) {
 
   if (!settings || !matrix || !explicit) {
     return (
-      <div className="border border-border bg-card px-6 py-16 text-center">
+      <div className="rounded-card border border-border bg-card px-6 py-16 text-center shadow-card">
         <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Loading notification settings…</p>
       </div>
     )
@@ -196,7 +196,7 @@ export default function NotificationSettings({email}: {email: string}) {
   return (
     <div className="space-y-6">
       {/* ------------------------------------------------------------------ global */}
-      <section className="border border-border bg-card">
+      <section className="rounded-card border border-border bg-card shadow-card">
         <div className="flex flex-col gap-4 border-b border-border px-6 py-5 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-start gap-3">
             {settings.globalEnabled ? <Bell className="mt-1 h-4 w-4 text-gold" strokeWidth={1.75} /> : <BellOff className="mt-1 h-4 w-4 text-muted-foreground" strokeWidth={1.75} />}
@@ -221,7 +221,7 @@ export default function NotificationSettings({email}: {email: string}) {
                   type="time"
                   value={quietFrom ?? ''}
                   onChange={(e) => void saveQuietHours(e.target.value || null, quietTo)}
-                  className="border border-border bg-background px-2 py-1.5 text-xs text-primary focus:border-gold focus:outline-none"
+                  className="rounded-standard border border-border bg-background px-2 py-1.5 text-xs text-primary focus:border-primary"
                   aria-label="Quiet hours start"
                 />
                 <span className="text-xs text-muted-foreground">to</span>
@@ -229,7 +229,7 @@ export default function NotificationSettings({email}: {email: string}) {
                   type="time"
                   value={quietTo ?? ''}
                   onChange={(e) => void saveQuietHours(quietFrom, e.target.value || null)}
-                  className="border border-border bg-background px-2 py-1.5 text-xs text-primary focus:border-gold focus:outline-none"
+                  className="rounded-standard border border-border bg-background px-2 py-1.5 text-xs text-primary focus:border-primary"
                   aria-label="Quiet hours end"
                 />
                 {quietFrom && quietTo ? (
@@ -254,7 +254,7 @@ export default function NotificationSettings({email}: {email: string}) {
                   <select
                     value={settings.digestFrequency}
                     onChange={(e) => void setFrequency(e.target.value as 'daily' | 'weekly')}
-                    className="border border-border bg-background px-2 py-1.5 text-xs text-primary focus:border-gold focus:outline-none"
+                    className="rounded-standard border border-border bg-background px-2 py-1.5 text-xs text-primary focus:border-primary"
                     aria-label="Digest frequency"
                   >
                     <option value="daily">Daily</option>
@@ -268,7 +268,7 @@ export default function NotificationSettings({email}: {email: string}) {
       </section>
 
       {/* ------------------------------------------------------------------ matrix */}
-      <section className="border border-border bg-card">
+      <section className="rounded-card border border-border bg-card shadow-card">
         <div className="flex flex-col gap-3 border-b border-border px-6 py-5 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h2 className="text-sm font-semibold text-primary">Signals by channel</h2>
@@ -345,7 +345,7 @@ export default function NotificationSettings({email}: {email: string}) {
       </section>
 
       {/* ------------------------------------------------------------------ push devices */}
-      <section className="border border-border bg-card">
+      <section className="rounded-card border border-border bg-card shadow-card">
         <div className="flex flex-col gap-3 border-b border-border px-6 py-5 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h2 className="text-sm font-semibold text-primary">Push notifications on your devices</h2>
@@ -414,7 +414,7 @@ export default function NotificationSettings({email}: {email: string}) {
       </section>
 
       {/* ------------------------------------------------------------------ install */}
-      <section className="border border-border bg-card">
+      <section className="rounded-card border border-border bg-card shadow-card">
         <div className="border-b border-border px-6 py-5">
           <h2 className="text-sm font-semibold text-primary">Install the portal as an app</h2>
           <p className="mt-1 max-w-xl text-xs leading-relaxed text-muted-foreground">
@@ -427,7 +427,7 @@ export default function NotificationSettings({email}: {email: string}) {
       </section>
 
       {/* ------------------------------------------------------------------ email */}
-      <section className="border border-border bg-card">
+      <section className="rounded-card border border-border bg-card shadow-card">
         <div className="border-b border-border px-6 py-5">
           <h2 className="text-sm font-semibold text-primary">Email delivery</h2>
           <p className="mt-1 max-w-xl text-xs leading-relaxed text-muted-foreground">

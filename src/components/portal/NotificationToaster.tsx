@@ -167,7 +167,7 @@ export default function NotificationToaster({userId}: {userId?: string}) {
             <div
               key={t.id}
               onMouseEnter={() => setToasts((prev) => prev.map((x) => (x.id === t.id ? {...x, expiresAt: Date.now() + TOAST_MS} : x)))}
-              className="pointer-events-auto border border-border bg-card shadow-xl"
+              className="rounded-card pointer-events-auto border border-border bg-card shadow-overlay"
               role="status"
             >
               <div className="flex items-start gap-3 px-4 py-3">
@@ -213,8 +213,8 @@ export default function NotificationToaster({userId}: {userId?: string}) {
       {/* High-importance modal */}
       {modal ? (
         <div className="fixed inset-0 z-[70] flex items-center justify-center px-4">
-          <button type="button" aria-label="Dismiss" onClick={() => setModal(null)} className="absolute inset-0 bg-forest-deep/70 backdrop-blur-sm" />
-          <div className="relative w-full max-w-md border border-border bg-card shadow-2xl" role="alertdialog" aria-modal="true">
+          <button type="button" aria-label="Dismiss" onClick={() => setModal(null)} className="absolute inset-0 bg-black/24 backdrop-blur-[2px]" />
+          <div className="rounded-card relative w-full max-w-md border border-border bg-card shadow-overlay" role="alertdialog" aria-modal="true">
             <div className="flex items-start gap-4 px-6 py-6">
               {(() => {
                 const Icon = CATEGORY_ICONS[modal.category] ?? ShieldCheck

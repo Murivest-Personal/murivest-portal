@@ -34,7 +34,7 @@ const TONE_CLASSES: Record<string, string> = {
 export function StatusPill({status, label}: {status: string; label?: string}) {
   const tone = statusTone(status)
   return (
-    <span className={cn('inline-flex items-center whitespace-nowrap border px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em]', TONE_CLASSES[tone])}>
+    <span className={cn('rounded-micro inline-flex items-center whitespace-nowrap border px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em]', TONE_CLASSES[tone])}>
       {label ?? humanizeStatus(status)}
     </span>
   )
@@ -42,7 +42,7 @@ export function StatusPill({status, label}: {status: string; label?: string}) {
 
 export function RolePill({role}: {role: string}) {
   return (
-    <span className={cn('inline-flex items-center whitespace-nowrap border px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em]', TONE_CLASSES.info)}>
+    <span className={cn('rounded-micro inline-flex items-center whitespace-nowrap border px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em]', TONE_CLASSES.info)}>
       {humanizeStatus(role)}
     </span>
   )
@@ -75,12 +75,12 @@ export function MetricTile({
   tone?: keyof typeof TONE_CLASSES
 }) {
   return (
-    <div className={cn('border p-4 sm:p-5', TONE_CLASSES[tone])}>
+    <div className={cn('card-lift rounded-card border p-4 shadow-card sm:p-5', TONE_CLASSES[tone])}>
       <div className="flex items-start justify-between gap-3">
         <div className="text-[10px] font-medium uppercase tracking-[0.16em] opacity-70">{label}</div>
         {icon ? <div className="text-gold">{icon}</div> : null}
       </div>
-      <div className="mt-2 font-display text-2xl text-primary">{value}</div>
+      <div className="tabular mt-2 font-display text-2xl text-primary">{value}</div>
       {sub ? <div className="mt-1 text-xs text-muted-foreground">{sub}</div> : null}
       {trend !== undefined ? <div className="mt-2"><TrendPill value={trend} /></div> : null}
     </div>
@@ -89,7 +89,7 @@ export function MetricTile({
 
 export function SectionCard({title, description, actions, children, className}: {title: string; description?: string; actions?: ReactNode; children: ReactNode; className?: string}) {
   return (
-    <section className={cn('border border-border bg-card', className)}>
+    <section className={cn('rounded-card border border-border bg-card shadow-card', className)}>
       <div className="flex flex-col gap-2 border-b border-border px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between sm:px-5">
         <div className="min-w-0">
           <h2 className="font-display text-base text-primary">{title}</h2>
@@ -104,7 +104,7 @@ export function SectionCard({title, description, actions, children, className}: 
 
 export function EmptyState({title, description, action}: {title: string; description?: string; action?: ReactNode}) {
   return (
-    <div className="flex flex-col items-center justify-center border border-dashed border-border bg-secondary/40 px-6 py-10 text-center">
+    <div className="rounded-card flex flex-col items-center justify-center border border-dashed border-border bg-secondary/40 px-6 py-10 text-center">
       <div className="gold-rule w-10" aria-hidden="true" />
       <div className="mt-3 font-display text-sm text-primary">{title}</div>
       {description ? <p className="mt-1 max-w-md text-xs leading-relaxed text-muted-foreground">{description}</p> : null}
@@ -145,7 +145,7 @@ export function DataTable({head, children, dense = false}: {head: ReactNode[]; c
             ))}
           </tr>
         </thead>
-        <tbody className={cn('divide-y divide-border/60', dense ? '[&_td]:py-2' : '[&_td]:py-3')}>{children}</tbody>
+        <tbody className={cn('divide-y divide-border/60 [&_tr:hover]:bg-secondary/50 [&_tr]:transition-colors [&_tr]:duration-200', dense ? '[&_td]:py-2' : '[&_td]:py-3')}>{children}</tbody>
       </table>
     </div>
   )

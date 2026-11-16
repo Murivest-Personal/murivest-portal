@@ -77,7 +77,7 @@ export default async function OpportunityDetailPage({params}: {params: Promise<{
       </nav>
 
       {/* Header */}
-      <header className="border border-border bg-card p-6 lg:p-8">
+      <header className="rounded-card border border-border bg-card shadow-card p-6 lg:p-8">
         <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0">
             <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -187,7 +187,7 @@ export default async function OpportunityDetailPage({params}: {params: Promise<{
 
       {/* Rationale + risks */}
       <section className="grid gap-6 lg:grid-cols-2">
-        <div className="border border-border bg-card p-6">
+        <div className="rounded-card border border-border bg-card shadow-card p-6">
           <h2 className="mb-4 font-display text-xl text-primary">Investment rationale</h2>
           {o.investmentRationale ? (
             <PortableBlocks blocks={o.investmentRationale} />
@@ -195,7 +195,7 @@ export default async function OpportunityDetailPage({params}: {params: Promise<{
             <p className="text-xs leading-relaxed text-muted-foreground">Rationale is authored with the institutional brief for this asset.</p>
           )}
         </div>
-        <div className="border border-border bg-card p-6">
+        <div className="rounded-card border border-border bg-card shadow-card p-6">
           <h2 className="mb-4 font-display text-xl text-primary">Key risks &amp; considerations</h2>
           {o.keyRisks && o.keyRisks.length > 0 ? (
             <ul className="space-y-2.5">
@@ -214,7 +214,7 @@ export default async function OpportunityDetailPage({params}: {params: Promise<{
 
       {/* Lease profile */}
       {o.leaseProfile && o.leaseProfile.length > 0 ? (
-        <section className="border border-border bg-card p-6">
+        <section className="rounded-card border border-border bg-card shadow-card p-6">
           <h2 className="mb-4 font-display text-xl text-primary">Lease profile</h2>
           <div className="overflow-x-auto">
             <table className="w-full min-w-160 text-sm">
@@ -242,7 +242,7 @@ export default async function OpportunityDetailPage({params}: {params: Promise<{
       ) : null}
 
       {/* Documents */}
-      <section className="border border-border bg-card p-6">
+      <section className="rounded-card border border-border bg-card shadow-card p-6">
         <div className="mb-4 flex items-center justify-between">
           <h2 className="font-display text-xl text-primary">Available documentation</h2>
           <Link href="/portal/documents" className="inline-flex items-center gap-1.5 text-[10px] uppercase tracking-[0.14em] text-gold hover:underline">
@@ -276,7 +276,7 @@ export default async function OpportunityDetailPage({params}: {params: Promise<{
       </section>
 
       {/* Enquiry */}
-      <section className="border border-border bg-card p-6">
+      <section className="rounded-card border border-border bg-card shadow-card p-6">
         <div className="mb-4 flex items-center gap-2">
           <MessagesSquare className="h-4 w-4 text-gold" />
           <h2 className="font-display text-xl text-primary">Submit an enquiry</h2>

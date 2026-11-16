@@ -176,7 +176,7 @@ export default function InvestorsWorkspace({initial, canExport}: {initial: Inves
 
 function SummaryTile({label, value}: {label: string; value: string}) {
   return (
-    <div className="border border-border bg-card p-4">
+    <div className="rounded-card border border-border bg-card shadow-card p-4">
       <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">{label}</div>
       <div className="mt-1 font-display text-xl text-primary tabular-nums">{value}</div>
     </div>

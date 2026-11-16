@@ -6,7 +6,7 @@ import type {CriteriaInput} from '@/lib/validation'
 import {ASSET_CLASS_OPTIONS, DEAL_STRUCTURE_OPTIONS, CURRENCY_OPTIONS, GEO_OPTIONS} from '@/lib/constants'
 import {cn} from '@/lib/utils'
 
-const input = 'w-full border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:border-gold focus:outline-none'
+const input = 'w-full rounded-standard border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:border-primary'
 const label = 'mb-1.5 block text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground'
 
 const EXIT_OPTIONS = [
@@ -81,7 +81,7 @@ export default function CriteriaPanel({initial}: {initial: CriteriaInput | null}
 
       <div className="grid gap-6 lg:grid-cols-3">
         {/* Capital */}
-        <section className="space-y-4 border border-border bg-card p-5">
+        <section className="space-y-4 rounded-card border border-border bg-card shadow-card p-5">
           <h3 className="font-display text-lg text-primary">Capital &amp; currency</h3>
           <label className="block">
             <span className={label}>Reporting currency</span>
@@ -113,7 +113,7 @@ export default function CriteriaPanel({initial}: {initial: CriteriaInput | null}
         </section>
 
         {/* Where & what */}
-        <section className="space-y-4 border border-border bg-card p-5">
+        <section className="space-y-4 rounded-card border border-border bg-card shadow-card p-5">
           <h3 className="font-display text-lg text-primary">Where &amp; what</h3>
           <div>
             <span className={label}>Asset classes</span>
@@ -199,7 +199,7 @@ export default function CriteriaPanel({initial}: {initial: CriteriaInput | null}
         </section>
 
         {/* Returns, hold, leverage, risk */}
-        <section className="space-y-4 border border-border bg-card p-5">
+        <section className="space-y-4 rounded-card border border-border bg-card shadow-card p-5">
           <h3 className="font-display text-lg text-primary">Returns, hold &amp; risk</h3>
           <div className="grid grid-cols-2 gap-3">
             {(

@@ -44,7 +44,7 @@ export default function SaveButton({
       aria-pressed={saved}
       aria-label={saved ? 'Remove from saved opportunities' : 'Save opportunity'}
       className={cn(
-        'inline-flex items-center gap-2 border px-4 py-2 text-[11px] font-medium uppercase tracking-[0.12em] transition-colors',
+        'press-scale rounded-standard inline-flex items-center gap-2 border px-4 py-2 text-[11px] font-medium uppercase tracking-[0.12em] transition-colors',
         saved ? 'border-gold bg-gold/10 text-primary' : 'border-border text-primary hover:border-gold hover:text-gold',
         compact && 'px-2.5 py-1.5',
       )}

@@ -52,7 +52,7 @@ export default async function IntelligencePage() {
       ) : (
         <div className="grid gap-5 lg:grid-cols-2">
           {reports.map((r) => (
-            <article key={r._id} className="flex flex-col border border-border bg-card p-6 transition-colors hover:border-gold/40">
+            <article key={r._id} className="flex flex-col rounded-card border border-border bg-card shadow-card p-6 transition-colors hover:border-gold/40">
               <div className="mb-3 flex flex-wrap items-center gap-2">
                 <span className="inline-flex items-center bg-primary px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-primary-foreground">
                   {CATEGORY_LABEL[r.category] || r.category}

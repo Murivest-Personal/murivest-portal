@@ -1,0 +1,579 @@
+     1→import type {Metadata} from 'next'
+     2→import Link from 'next/link'
+     3→import {supabase, unwrap, unwrapNullable, unwrapCount, toCamel, toCamelList} from '@/lib/supabase'
+     4→import type {
+     5→  CapitalCallRow,
+     6→  DocumentRequestRow,
+     7→  EnquiryRow,
+     8→  MandateRow,
+     9→  OpportunityViewRow,
+    10→  OrderRow,
+    11→  PortfolioPositionRow,
+    12→  SavedOpportunityRow,
+    13→  ScenarioRow,
+    14→  UserRow,
+    15→} from '@/lib/db-types'
+    16→import {
+    17→  ArrowRight,
+    18→  BadgeCheck,
+    19→  BookOpenCheck,
+    20→  Briefcase,
+    21→  Calculator,
+    22→  ClipboardList,
+    23→  Eye,
+    24→  FileStack,
+    25→  MessagesSquare,
+    26→  ScrollText,
+    27→  ShieldCheck,
+    28→  Sparkles,
+    29→} from 'lucide-react'
+    30→import {requirePortalUser, classificationLabel, tierLabel} from '@/lib/auth/context'
+    31→import {getOpportunities} from '@/lib/sanity/queries'
+    32→import {getCriteria} from '@/lib/portal/data'
+    33→import {matchOpportunity} from '@/lib/portal/matching'
+    34→import {fmtMoney, fmtDate, relativeTime, humanizeStatus} from '@/lib/format'
+    35→import {Metric, StatusBadge, EmptyState, SectionHeading} from '@/components/brand/primitives'
+    36→import OpportunityCard from '@/components/portal/OpportunityCard'
+    37→import {isSanityConfigured} from '@/lib/sanity/client'
+    38→
+    39→export const metadata: Metadata = {
+    40→  title: 'Overview',
+    41→  robots: {index: false, follow: false},
+    42→}
+    43→
+    44→export const dynamic = 'force-dynamic'
+    45→
+    46→export default async function PortalOverviewPage() {
+    47→  const ctx = await requirePortalUser()
+    48→  const uid = ctx.user.id
+    49→
+    50→  const advisorId = ctx.profile?.advisorId || null
+    51→
+    52→  const [criteria, savedIds, recentViews, orders, mandates, scenarios, positions, docRequests, unreadNotifications, latestEnquiries, advisor] =
+    53→    await Promise.all([
+    54→      getCriteria(uid),
+    55→      supabase
+    56→        .from('saved_opportunities')
+    57→        .select('sanity_id')
+    58→        .eq('user_id', uid)
+    59→        .then((res) => new Set(unwrap<Pick<SavedOpportunityRow, 'sanity_id'>[]>(res, 'savedOpportunities.ids').map((r) => r.sanity_id))),
+    60→      supabase
+    61→        .from('opportunity_views')
+    62→        .select('sanity_id, viewed_at')
+    63→        .eq('user_id', uid)
+    64→        .order('viewed_at', {ascending: false})
+    65→        .limit(5)
+    66→        .then((res) => toCamelList(unwrap<Pick<OpportunityViewRow, 'sanity_id' | 'viewed_at'>[]>(res, 'opportunityViews.recent'))),
+    67→      supabase
+    68→        .from('orders')
+    69→        .select('*')
+    70→        .eq('user_id', uid)
+    71→        .order('created_at', {ascending: false})
+    72→        .limit(5)
+    73→        .then((res) => toCamelList(unwrap<OrderRow[]>(res, 'orders.recent'))),
+    74→      supabase
+    75→        .from('mandates')
+    76→        .select('*')
+    77→        .eq('user_id', uid)
+    78→        .order('updated_at', {ascending: false})
+    79→        .limit(4)
+    80→        .then((res) => toCamelList(unwrap<MandateRow[]>(res, 'mandates.recent'))),
+    81→      supabase
+    82→        .from('scenarios')
+    83→        .select('*')
+    84→        .eq('user_id', uid)
+    85→        .order('updated_at', {ascending: false})
+    86→        .limit(4)
+    87→        .then((res) => toCamelList(unwrap<ScenarioRow[]>(res, 'scenarios.recent'))),
+    88→      supabase
+    89→        .from('portfolio_positions')
+    90→        .select('*')
+    91→        .eq('user_id', uid)
+    92→        .limit(12)
+    93→        .then((res) => toCamelList(unwrap<PortfolioPositionRow[]>(res, 'positions.recent'))),
+    94→      supabase
+    95→        .from('document_requests')
+    96→        .select('*')
+    97→        .eq('user_id', uid)
+    98→        .order('created_at', {ascending: false})
+    99→        .limit(3)
+   100→        .then((res) => toCamelList(unwrap<DocumentRequestRow[]>(res, 'documentRequests.recent'))),
+   101→      supabase
+   102→        .from('notifications')
+   103→        .select('*', {count: 'exact', head: true})
+   104→        .eq('user_id', uid)
+   105→        .is('read_at', null)
+   106→        .then((res) => unwrapCount(res, 'notifications.unread')),
+   107→      supabase
+   108→        .from('enquiries')
+   109→        .select('*')
+   110→        .eq('user_id', uid)
+   111→        .order('updated_at', {ascending: false})
+   112→        .limit(3)
+   113→        .then((res) => toCamelList(unwrap<EnquiryRow[]>(res, 'enquiries.recent'))),
+   114→      advisorId
+   115→        ? supabase
+   116→            .from('users')
+   117→            .select('full_name, email')
+   118→            .eq('id', advisorId)
+   119→            .maybeSingle()
+   120→            .then((res) => {
+   121→              const row = unwrapNullable<Pick<UserRow, 'full_name' | 'email'>>(res, 'users.advisor')
+   122→              return row ? toCamel(row) : null
+   123→            })
+   124→        : Promise.resolve(null),
+   125→    ])
+   126→
+   127→  // Recommended opportunities (permission-filtered, criteria-scored)
+   128→  const opportunities = await getOpportunities(ctx.effectiveTier)
+   129→  const scored = opportunities
+   130→    .map((o) => ({o, match: matchOpportunity(o, criteria)}))
+   131→    .filter(({o}) => !savedIds.has(o._id))
+   132→    .sort((a, b) => b.match.score - a.match.score)
+   133→    .slice(0, 3)
+   134→
+   135→  // View counts for "high interest" signal
+   136→  // (former groupBy → column read + JS aggregation)
+   137→  const viewCounts = new Map<string, number>()
+   138→  const grouped = unwrap<Pick<OpportunityViewRow, 'sanity_id'>[]>(
+   139→    await supabase.from('opportunity_views').select('sanity_id'),
+   140→    'opportunityViews.counts',
+   141→  )
+   142→  for (const g of grouped) viewCounts.set(g.sanity_id, (viewCounts.get(g.sanity_id) ?? 0) + 1)
+   143→
+   144→  const savedOpportunities = opportunities.filter((o) => savedIds.has(o._id)).slice(0, 3)
+   145→  const recentOpportunityIds = recentViews.map((v) => v.sanityId)
+   146→
+   147→  const activeOrders = orders.filter((o) => !['delivered', 'cancelled'].includes(o.status))
+   148→  const activeMandates = mandates.filter((m) => !['draft'].includes(m.status))
+   149→  // relation include (position) → separate query + JS join
+   150→  const capitalPositionRows = unwrap<Pick<PortfolioPositionRow, 'id' | 'name'>[]>(
+   151→    await supabase.from('portfolio_positions').select('id, name').eq('user_id', uid),
+   152→    'positions.forCapitalCalls',
+   153→  )
+   154→  const positionNameById = new Map(capitalPositionRows.map((p) => [p.id, p.name]))
+   155→  const capitalCallsDue = capitalPositionRows.length
+   156→    ? toCamelList(
+   157→        unwrap<CapitalCallRow[]>(
+   158→          await supabase
+   159→            .from('capital_calls')
+   160→            .select('*')
+   161→            .in('position_id', capitalPositionRows.map((p) => p.id))
+   162→            .in('status', ['scheduled', 'called'])
+   163→            .order('due_date', {ascending: true})
+   164→            .limit(3),
+   165→          'capitalCalls.due',
+   166→        ),
+   167→      ).map((c) => ({...c, position: {name: positionNameById.get(c.positionId) ?? ''}}))
+   168→    : []
+   169→
+   170→  const verificationSteps = [
+   171→    {label: 'Email verified', done: !!ctx.user.emailVerifiedAt},
+   172→    {label: 'Investor classification', done: !!ctx.profile && ctx.profile.onboardingStep >= 1},
+   173→    {label: 'Profile submitted', done: ['profile_submitted', 'kyc_pending', 'in_review', 'verified'].includes(ctx.profile?.verificationStatus || '')},
+   174→    {label: 'KYC / AML review', done: ['in_review', 'verified'].includes(ctx.profile?.verificationStatus || '')},
+   175→    {label: 'NDA acceptance', done: !!ctx.profile?.ndaAccepted},
+   176→    {label: 'Tier assignment', done: (ctx.profile?.accessTier || 'tier_1') !== 'tier_1' || (ctx.profile?.verificationStatus || '') === 'verified'},
+   177→  ]
+   178→
+   179→  const currency = ctx.profile?.capitalCurrency || 'USD'
+   180→  const equityAvailable = ctx.profile?.equityAvailable ?? null
+   181→
+   182→  return (
+   183→    <div className="space-y-10">
+   184→      {/* ============ Command header ============ */}
+   185→      <section className="border border-border bg-card p-6 lg:p-8">
+   186→        <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
+   187→          <div>
+   188→            <div className="eyebrow mb-2">Investor workspace</div>
+   189→            <h1 className="font-display text-3xl text-primary">{ctx.user.fullName || 'Your workspace'}</h1>
+   190→            <p className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+   191→              <span>{classificationLabel(ctx.profile)}</span>
+   192→              <span className="text-gold">·</span>
+   193→              <span>{tierLabel(ctx.effectiveTier)}</span>
+   194→              {advisor ? (
+   195→                <>
+   196→                  <span className="text-gold">·</span>
+   197→                  <span>Advisor: {advisor.fullName || advisor.email}</span>
+   198→                </>
+   199→              ) : null}
+   200→            </p>
+   201→          </div>
+   202→          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:max-w-xl">
+   203→            {equityAvailable != null ? (
+   204→              <Metric label="Equity available" value={fmtMoney(equityAvailable, currency, {compact: true})} tone="gold" />
+   205→            ) : (
+   206→              <Metric label="Equity available" value="Not stated" tone="gold" />
+   207→            )}
+   208→            <Metric label="Saved opportunities" value={String(savedIds.size)} sub="in your pipeline" />
+   209→            <Metric label="Active orders" value={String(activeOrders.length)} sub="briefs in motion" />
+   210→            <Metric label="Unread signals" value={String(unreadNotifications)} sub="notifications" />
+   211→          </div>
+   212→        </div>
+   213→
+   214→        {/* Quick actions */}
+   215→        <div className="mt-6 flex flex-wrap gap-2 border-t border-border pt-6">
+   216→          {[
+   217→            {href: '/portal/discover', label: 'Discover opportunities', icon: Eye},
+   218→            {href: '/portal/studio', label: 'Start a scenario', icon: Calculator},
+   219→            {href: '/portal/orders', label: 'Request a brief', icon: BookOpenCheck},
+   220→            {href: '/portal/mandates', label: 'Submit a mandate', icon: ScrollText},
+   221→            {href: '/portal/activity', label: 'Message advisor', icon: MessagesSquare},
+   222→          ].map((a) => (
+   223→            <Link
+   224→              key={a.href + a.label}
+   225→              href={a.href}
+   226→              className="inline-flex items-center gap-2 border border-border px-4 py-2.5 text-[11px] font-medium uppercase tracking-[0.12em] text-primary transition-colors hover:border-gold hover:text-gold"
+   227→            >
+   228→              <a.icon className="h-3.5 w-3.5 text-gold/80" />
+   229→              {a.label}
+   230→            </Link>
+   231→          ))}
+   232→        </div>
+   233→      </section>
+   234→
+   235→      {/* ============ Verification & gating ============ */}
+   236→      <section className="grid gap-6 lg:grid-cols-[1.2fr_1fr]">
+   237→        <div className="min-w-0 border border-border bg-card p-6">
+   238→          <div className="mb-4 flex items-center justify-between">
+   239→            <h2 className="font-display text-xl text-primary">Verification & access</h2>
+   240→            <StatusBadge status={ctx.profile?.verificationStatus || 'unverified'} />
+   241→          </div>
+   242→          <ol className="space-y-3">
+   243→            {verificationSteps.map((s) => (
+   244→              <li key={s.label} className="flex items-center gap-3 text-sm">
+   245→                <span className={`inline-flex h-5 w-5 items-center justify-center border ${s.done ? 'border-gold bg-gold/15 text-primary' : 'border-border text-muted-foreground/50'}`}>
+   246→                  {s.done ? <BadgeCheck className="h-3.5 w-3.5 text-gold" /> : null}
+   247→                </span>
+   248→                <span className={s.done ? 'text-primary' : 'text-muted-foreground'}>{s.label}</span>
+   249→              </li>
+   250→            ))}
+   251→          </ol>
+   252→          {!ctx.profile?.ndaAccepted ? (
+   253→            <div className="mt-5 border border-gold/40 bg-gold/5 p-4">
+   254→              <p className="text-xs leading-relaxed text-primary">
+   255→                <ShieldCheck className="mr-2 inline h-4 w-4 text-gold" />
+   256→                Accept the confidentiality agreement to unlock confidential tiers of opportunities, briefs and data-room material.
+   257→              </p>
+   258→              <Link href="/portal/documents?nda=1" className="mt-3 inline-flex items-center gap-2 border border-gold px-4 py-2 text-[11px] font-medium uppercase tracking-[0.12em] text-primary hover:bg-gold/10">
+   259→                Review the NDA <ArrowRight className="h-3.5 w-3.5" />
+   260→              </Link>
+   261→            </div>
+   262→          ) : null}
+   263→          {!ctx.onboardingComplete ? (
+   264→            <Link href="/portal/onboarding" className="mt-5 inline-flex items-center gap-2 text-xs uppercase tracking-[0.14em] text-gold hover:underline">
+   265→              Complete onboarding <ArrowRight className="h-3.5 w-3.5" />
+   266→            </Link>
+   267→          ) : null}
+   268→        </div>
+   269→
+   270→        <div className="min-w-0 border border-border bg-card p-6">
+   271→          <h2 className="mb-4 font-display text-xl text-primary">Active criteria</h2>
+   272→          {criteria ? (
+   273→            <dl className="grid grid-cols-2 gap-4 text-sm">
+   274→              <div>
+   275→                <dt className="eyebrow mb-1">Equity</dt>
+   276→                <dd className="tabular text-primary">{criteria.equityAvailable != null ? fmtMoney(criteria.equityAvailable, criteria.currency, {compact: true}) : '—'}</dd>
+   277→              </div>
+   278→              <div>
+   279→                <dt className="eyebrow mb-1">Target net yield</dt>
+   280→                <dd className="tabular text-primary">{criteria.minNetYield != null ? `${criteria.minNetYield}%+` : '—'}</dd>
+   281→              </div>
+   282→              <div>
+   283→                <dt className="eyebrow mb-1">Asset classes</dt>
+   284→                <dd className="text-primary">{(criteria.assetClasses || []).length || '—'}</dd>
+   285→              </div>
+   286→              <div>
+   287→                <dt className="eyebrow mb-1">Hold period</dt>
+   288→                <dd className="text-primary">{criteria.holdPeriodMin != null || criteria.holdPeriodMax != null ? `${criteria.holdPeriodMin ?? '–'}–${criteria.holdPeriodMax ?? '+'} yrs` : '—'}</dd>
+   289→              </div>
+   290→            </dl>
+   291→          ) : (
+   292→            <EmptyState
+   293→              icon={Calculator}
+   294→              title="No criteria on file"
+   295→              body="Capture your investment criteria once and Discover, matching and mandate pre-fills all reuse it."
+   296→              action={
+   297→                <Link href="/portal/studio?tab=criteria" className="inline-flex items-center gap-2 bg-primary px-5 py-2.5 text-[11px] font-medium uppercase tracking-[0.12em] text-primary-foreground hover:bg-forest-deep">
+   298→                  Set criteria <ArrowRight className="h-3.5 w-3.5" />
+   299→                </Link>
+   300→              }
+   301→            />
+   302→          )}
+   303→        </div>
+   304→      </section>
+   305→
+   306→      {/* ============ Recommended opportunities ============ */}
+   307→      <section>
+   308→        <SectionHeading
+   309→          eyebrow="High-signal"
+   310→          title="Recommended for your criteria"
+   311→          description="Permission-filtered and scored against your stated criteria. Matching is transparent — every card explains itself."
+   312→          className="flex flex-wrap items-end justify-between gap-4 [&>div]:mb-0"
+   313→        />
+   314→        {!isSanityConfigured() ? (
+   315→          <EmptyState
+   316→            icon={FileStack}
+   317→            title="Opportunity intelligence awaits publication"
+   318→            body="Murivest publishes opportunities through the content studio. When the first listings go live, this surface fills automatically with tier-filtered, criteria-matched assets — no generic inventory is ever shown."
+   319→          />
+   320→        ) : scored.length === 0 ? (
+   321→          <EmptyState
+   322→            icon={Eye}
+   323→            title="No recommendations yet"
+   324→            body={
+   325→              opportunities.length === 0
+   326→                ? 'No opportunities are currently published at your access tier. Your advisor will notify you as new inventory clears verification.'
+   327→                : 'Nothing matches your criteria right now. Adjust them in the Investment Studio, or save a search with alerts to be first to know.'
+   328→            }
+   329→            action={
+   330→              <Link href="/portal/studio?tab=criteria" className="inline-flex items-center gap-2 border border-border px-5 py-2.5 text-[11px] uppercase tracking-[0.12em] text-primary hover:border-gold hover:text-gold">
+   331→                Refine criteria
+   332→              </Link>
+   333→            }
+   334→          />
+   335→        ) : (
+   336→          <div className="space-y-4">
+   337→            {scored.map(({o, match}) => (
+   338→              <OpportunityCard
+   339→                key={o._id}
+   340→                opportunity={o}
+   341→                saved={false}
+   342→                matchedTags={match.reasons.slice(0, 2)}
+   343→                viewCount={viewCounts.get(o._id)}
+   344→              />
+   345→            ))}
+   346→          </div>
+   347→        )}
+   348→      </section>
+   349→
+   350→      {/* ============ Pipeline in motion ============ */}
+   351→      <section className="grid gap-6 lg:grid-cols-3">
+   352→        {/* Orders */}
+   353→        <div className="min-w-0 border border-border bg-card p-6">
+   354→          <div className="mb-4 flex items-center justify-between">
+   355→            <h3 className="font-display text-lg text-primary">Orders</h3>
+   356→            <Link href="/portal/orders" className="text-[10px] uppercase tracking-[0.14em] text-gold hover:underline">
+   357→              All
+   358→            </Link>
+   359→          </div>
+   360→          {orders.length === 0 ? (
+   361→            <p className="text-xs leading-relaxed text-muted-foreground">
+   362→              No briefs ordered yet. Institutional briefs for specific opportunities, auction assets or custom underwriting packages are available on request.
+   363→            </p>
+   364→          ) : (
+   365→            <ul className="space-y-3">
+   366→              {orders.slice(0, 4).map((o) => (
+   367→                <li key={o.id} className="flex items-start justify-between gap-3 border-b border-border pb-3 last:border-0">
+   368→                  <div className="min-w-0">
+   369→                    <div className="truncate text-sm font-medium text-primary">{o.briefTitle}</div>
+   370→                    <div className="mt-0.5 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+   371→                      {o.reference} · {relativeTime(o.createdAt)}
+   372→                    </div>
+   373→                  </div>
+   374→                  <StatusBadge status={o.status} />
+   375→                </li>
+   376→              ))}
+   377→            </ul>
+   378→          )}
+   379→        </div>
+   380→
+   381→        {/* Mandates */}
+   382→        <div className="min-w-0 border border-border bg-card p-6">
+   383→          <div className="mb-4 flex items-center justify-between">
+   384→            <h3 className="font-display text-lg text-primary">Mandates</h3>
+   385→            <Link href="/portal/mandates" className="text-[10px] uppercase tracking-[0.14em] text-gold hover:underline">
+   386→              All
+   387→            </Link>
+   388→          </div>
+   389→          {mandates.length === 0 ? (
+   390→            <p className="text-xs leading-relaxed text-muted-foreground">
+   391→              Define an acquisition mandate — size, markets, structures, return targets — and Murivest sources against it on your behalf.
+   392→            </p>
+   393→          ) : (
+   394→            <ul className="space-y-3">
+   395→              {mandates.slice(0, 4).map((m) => (
+   396→                <li key={m.id} className="flex items-start justify-between gap-3 border-b border-border pb-3 last:border-0">
+   397→                  <div className="min-w-0">
+   398→                    <div className="truncate text-sm font-medium text-primary">{m.title}</div>
+   399→                    <div className="mt-0.5 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">{m.reference}</div>
+   400→                  </div>
+   401→                  <StatusBadge status={m.status} />
+   402→                </li>
+   403→              ))}
+   404→            </ul>
+   405→          )}
+   406→        </div>
+   407→
+   408→        {/* Upcoming actions */}
+   409→        <div className="min-w-0 border border-border bg-card p-6">
+   410→          <h3 className="mb-4 font-display text-lg text-primary">Upcoming & outstanding</h3>
+   411→          <ul className="space-y-3 text-sm">
+   412→            {capitalCallsDue.map((c) => (
+   413→              <li key={c.id} className="flex items-start justify-between gap-3 border-b border-border pb-3">
+   414→                <div>
+   415→                  <div className="font-medium text-primary">{c.label}</div>
+   416→                  <div className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+   417→                    Capital call · {c.position.name} {c.dueDate ? `· due ${fmtDate(c.dueDate)}` : ''}
+   418→                  </div>
+   419→                </div>
+   420→                <span className="tabular text-xs text-primary">{fmtMoney(c.amount, c.currency, {compact: true})}</span>
+   421→              </li>
+   422→            ))}
+   423→            {docRequests.map((r) => (
+   424→              <li key={r.id} className="flex items-start justify-between gap-3 border-b border-border pb-3">
+   425→                <div>
+   426→                  <div className="font-medium text-primary">{r.subject}</div>
+   427→                  <div className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">Document request</div>
+   428→                </div>
+   429→                <StatusBadge status={r.status} />
+   430→              </li>
+   431→            ))}
+   432→            {activeOrders.map((o) => (
+   433→              <li key={`act-${o.id}`} className="flex items-start justify-between gap-3 border-b border-border pb-3">
+   434→                <div>
+   435→                  <div className="font-medium text-primary">{o.briefTitle}</div>
+   436→                  <div className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+   437→                    Order {o.status === 'awaiting_payment' ? '· payment pending' : '· in preparation'}
+   438→                  </div>
+   439→                </div>
+   440→                <StatusBadge status={o.status} />
+   441→              </li>
+   442→            ))}
+   443→            {capitalCallsDue.length === 0 && docRequests.length === 0 && activeOrders.length === 0 ? (
+   444→              <li className="text-xs leading-relaxed text-muted-foreground">Nothing outstanding. Your workspace is current.</li>
+   445→            ) : null}
+   446→          </ul>
+   447→        </div>
+   448→      </section>
+   449→
+   450→      {/* ============ Saved + recent + scenarios + portfolio ============ */}
+   451→      <section className="grid gap-6 lg:grid-cols-2">
+   452→        <div className="min-w-0 border border-border bg-card p-6">
+   453→          <div className="mb-4 flex items-center justify-between">
+   454→            <h3 className="font-display text-lg text-primary">Saved & recently viewed</h3>
+   455→            <Link href="/portal/discover" className="text-[10px] uppercase tracking-[0.14em] text-gold hover:underline">
+   456→              Discover
+   457→            </Link>
+   458→          </div>
+   459→          {savedOpportunities.length === 0 && recentOpportunityIds.length === 0 ? (
+   460→            <p className="text-xs leading-relaxed text-muted-foreground">
+   461→              Nothing saved yet. Save opportunities from Discover to build a private pipeline that survives across sessions.
+   462→            </p>
+   463→          ) : (
+   464→            <ul className="space-y-3">
+   465→              {savedOpportunities.map((o) => (
+   466→                <li key={`s-${o._id}`} className="flex items-center justify-between gap-3 border-b border-border pb-3 last:border-0">
+   467→                  <Link href={`/portal/discover/${encodeURIComponent(o._id)}`} className="min-w-0 flex-1 truncate text-sm font-medium text-primary hover:text-gold">
+   468→                    {o.title}
+   469→                  </Link>
+   470→                  <span className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">Saved</span>
+   471→                </li>
+   472→              ))}
+   473→              {recentViews
+   474→                .filter((v) => !savedIds.has(v.sanityId) && opportunities.some((o) => o._id === v.sanityId))
+   475→                .slice(0, 3)
+   476→                .map((v) => {
+   477→                  const o = opportunities.find((x) => x._id === v.sanityId)!
+   478→                  return (
+   479→                    <li key={`v-${v.sanityId}`} className="flex items-center justify-between gap-3">
+   480→                      <Link href={`/portal/discover/${encodeURIComponent(v.sanityId)}`} className="min-w-0 flex-1 truncate text-sm text-primary hover:text-gold">
+   481→                        {o.title}
+   482→                      </Link>
+   483→                      <span className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">{relativeTime(v.viewedAt)}</span>
+   484→                    </li>
+   485→                  )
+   486→                })}
+   487→            </ul>
+   488→          )}
+   489→        </div>
+   490→
+   491→        <div className="min-w-0 space-y-6">
+   492→          <div className="min-w-0 border border-border bg-card p-6">
+   493→            <div className="mb-4 flex items-center justify-between">
+   494→              <h3 className="font-display text-lg text-primary">Saved analyses</h3>
+   495→              <Link href="/portal/studio" className="text-[10px] uppercase tracking-[0.14em] text-gold hover:underline">
+   496→                Studio
+   497→              </Link>
+   498→            </div>
+   499→            {scenarios.length === 0 ? (
+   500→              <p className="text-xs leading-relaxed text-muted-foreground">
+   501→                No scenarios yet. The Investment Studio keeps your criteria, financing and exit analysis — return months later and resume.
+   502→              </p>
+   503→            ) : (
+   504→              <ul className="space-y-3">
+   505→                {scenarios.map((s) => (
+   506→                  <li key={s.id} className="flex items-center justify-between gap-3 border-b border-border pb-3 last:border-0">
+   507→                    <div className="min-w-0">
+   508→                      <div className="truncate text-sm font-medium text-primary">{s.name}</div>
+   509→                      <div className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+   510→                        {s.opportunityTitle ? `${s.opportunityTitle} · ` : ''}
+   511→                        {relativeTime(s.updatedAt)}
+   512→                      </div>
+   513→                    </div>
+   514→                    <Sparkles className="h-4 w-4 flex-shrink-0 text-gold/60" />
+   515→                  </li>
+   516→                ))}
+   517→              </ul>
+   518→            )}
+   519→          </div>
+   520→
+   521→          <div className="min-w-0 border border-border bg-card p-6">
+   522→            <div className="mb-4 flex items-center justify-between">
+   523→              <h3 className="font-display text-lg text-primary">Portfolio snapshot</h3>
+   524→              <Link href="/portal/portfolio" className="text-[10px] uppercase tracking-[0.14em] text-gold hover:underline">
+   525→                My investments
+   526→              </Link>
+   527→            </div>
+   528→            {positions.length === 0 ? (
+   529→              <p className="text-xs leading-relaxed text-muted-foreground">
+   530→                No positions recorded. When you transact through Murivest, your owned and committed assets are tracked here — actual performance, distinct from pipeline analysis.
+   531→              </p>
+   532→            ) : (
+   533→              <ul className="space-y-3">
+   534→                {positions.slice(0, 4).map((p) => (
+   535→                  <li key={p.id} className="flex items-center justify-between gap-3 border-b border-border pb-3 last:border-0">
+   536→                    <div className="min-w-0">
+   537→                      <div className="truncate text-sm font-medium text-primary">{p.name}</div>
+   538→                      <div className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">{humanizeStatus(p.status)}</div>
+   539→                    </div>
+   540→                    <Briefcase className="h-4 w-4 flex-shrink-0 text-gold/60" />
+   541→                  </li>
+   542→                ))}
+   543→              </ul>
+   544→            )}
+   545→          </div>
+   546→        </div>
+   547→      </section>
+   548→
+   549→      {/* ============ Advisor comms ============ */}
+   550→      <section className="min-w-0 border border-border bg-card p-6">
+   551→        <div className="mb-4 flex items-center justify-between">
+   552→          <h3 className="font-display text-lg text-primary">From your Murivest desk</h3>
+   553→          <Link href="/portal/activity" className="text-[10px] uppercase tracking-[0.14em] text-gold hover:underline">
+   554→            Activity & communications
+   555→          </Link>
+   556→        </div>
+   557→        {latestEnquiries.length === 0 ? (
+   558→          <p className="text-xs leading-relaxed text-muted-foreground">
+   559→            No correspondence yet. Enquiries, brief clarifications and advisor messages all live in one thread view — with a complete audit trail.
+   560→          </p>
+   561→        ) : (
+   562→          <ul className="space-y-3">
+   563→            {latestEnquiries.map((e) => (
+   564→              <li key={e.id} className="flex items-start justify-between gap-3 border-b border-border pb-3 last:border-0">
+   565→                <div className="min-w-0">
+   566→                  <div className="truncate text-sm font-medium text-primary">{e.subject}</div>
+   567→                  <div className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">{e.message}</div>
+   568→                  <div className="mt-1 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">{relativeTime(e.updatedAt)}</div>
+   569→                </div>
+   570→                <StatusBadge status={e.status} />
+   571→              </li>
+   572→            ))}
+   573→          </ul>
+   574→        )}
+   575→      </section>
+   576→    </div>
+   577→  )
+   578→}
+   579→

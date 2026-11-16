@@ -23,7 +23,10 @@ function TableHeader({ className, ...props }: React.ComponentProps<"thead">) {
   return (
     <thead
       data-slot="table-header"
-      className={cn("[&_tr]:border-b", className)}
+      className={cn(
+        "[&_tr]:border-b [&_th]:text-[11px] [&_th]:font-medium [&_th]:uppercase [&_th]:tracking-[0.12em] [&_th]:text-muted-foreground",
+        className
+      )}
       {...props}
     />
   )
@@ -57,7 +60,7 @@ function TableRow({ className, ...props }: React.ComponentProps<"tr">) {
     <tr
       data-slot="table-row"
       className={cn(
-        "hover:bg-muted/50 data-[state=selected]:bg-muted border-b transition-colors",
+        "hover:bg-secondary/60 data-[state=selected]:bg-secondary border-b transition-colors duration-200",
         className
       )}
       {...props}
@@ -91,6 +94,21 @@ function TableCell({ className, ...props }: React.ComponentProps<"td">) {
   )
 }
 
+/** Numeric cells — tabular numerals, right-aligned, perfect decimal
+ *  alignment for institutional money columns. */
+function TableCellNumeric({ className, ...props }: React.ComponentProps<"td">) {
+  return (
+    <td
+      data-slot="table-cell-numeric"
+      className={cn(
+        "tabular p-2 text-right align-middle whitespace-nowrap [&:has([role=checkbox])]:pr-0",
+        className
+      )}
+      {...props}
+    />
+  )
+}
+
 function TableCaption({
   className,
   ...props
@@ -112,5 +130,6 @@ export {
   TableHead,
   TableRow,
   TableCell,
+  TableCellNumeric,
   TableCaption,
 }

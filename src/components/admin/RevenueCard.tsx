@@ -356,7 +356,7 @@ function RevenueBreakdowns({data}: {data: RevenueCardData}) {
       {/* Pipeline revenue */}
       {data.pipeline ? (
         <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-          <div className="border border-border bg-card p-5">
+          <div className="rounded-card border border-border bg-card shadow-card p-5">
             <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">Weighted pipeline (active mandates)</div>
             <div className="mt-1 font-display text-3xl text-primary tabular-nums">{fmtMoney(data.pipeline.weightedUsd)}</div>
             <div className="mt-1 text-xs text-muted-foreground">
@@ -386,7 +386,7 @@ function RevenueBreakdowns({data}: {data: RevenueCardData}) {
               ))}
             </ul>
           </div>
-          <div className="border border-border bg-card p-5">
+          <div className="rounded-card border border-border bg-card shadow-card p-5">
             <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">Pipeline by stage</div>
             {data.pipeline.byStage.length === 0 ? (
               <p className="mt-3 text-xs text-muted-foreground">No active USD mandates with stated allocations.</p>
@@ -416,7 +416,7 @@ function RevenueBreakdowns({data}: {data: RevenueCardData}) {
       {/* Unit economics + reconciliation + cohorts */}
       <div className="grid gap-6 lg:grid-cols-3">
         {data.units ? (
-          <div className="border border-border bg-card p-5">
+          <div className="rounded-card border border-border bg-card shadow-card p-5">
             <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">Unit economics</div>
             <dl className="mt-3 space-y-2 text-xs">
               <div className="flex justify-between border-b border-border/60 pb-2">
@@ -442,7 +442,7 @@ function RevenueBreakdowns({data}: {data: RevenueCardData}) {
           </div>
         ) : null}
         {data.cash ? (
-          <div className="border border-border bg-card p-5">
+          <div className="rounded-card border border-border bg-card shadow-card p-5">
             <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">Cash vs recognised</div>
             <dl className="mt-3 space-y-2 text-xs">
               <div className="flex justify-between border-b border-border/60 pb-2">
@@ -461,7 +461,7 @@ function RevenueBreakdowns({data}: {data: RevenueCardData}) {
           </div>
         ) : null}
         {data.cohorts && data.cohorts.length > 0 ? (
-          <div className="border border-border bg-card p-5">
+          <div className="rounded-card border border-border bg-card shadow-card p-5">
             <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">Cohort revenue (registration month)</div>
             <ul className="mt-3 space-y-2 text-xs">
               {data.cohorts.slice(-8).reverse().map((c) => (

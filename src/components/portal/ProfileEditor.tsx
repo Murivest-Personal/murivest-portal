@@ -7,7 +7,7 @@ import {ArrowRight, Bell, Loader2, Save} from 'lucide-react'
 import {CURRENCY_OPTIONS} from '@/lib/constants'
 import {cn} from '@/lib/utils'
 
-const input = 'w-full border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:border-gold focus:outline-none'
+const input = 'w-full rounded-standard border border-border bg-background px-3 py-2.5 text-sm text-foreground focus:border-primary'
 const label = 'mb-1.5 block text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground'
 
 export interface ProfileForm {
@@ -60,7 +60,7 @@ export default function ProfileEditor({profile}: {profile: ProfileForm}) {
 
   return (
     <form onSubmit={save} className="space-y-8">
-      <section className="grid gap-5 border border-border bg-card p-6 lg:grid-cols-2">
+      <section className="grid gap-5 rounded-card border border-border bg-card shadow-card p-6 lg:grid-cols-2">
         <div className="grid grid-cols-2 gap-3 lg:col-span-2">
           <label className="block">
             <span className={label}>Full name</span>
@@ -133,7 +133,7 @@ export default function ProfileEditor({profile}: {profile: ProfileForm}) {
         </div>
       </section>
 
-      <section className="border border-border bg-card p-6">
+      <section className="rounded-card border border-border bg-card shadow-card p-6">
         <h3 className="mb-2 font-display text-lg text-primary">Notifications</h3>
         <p className="mb-4 text-xs leading-relaxed text-muted-foreground">
           In-app, push and email signals — controlled per category and per channel, with quiet hours and an optional digest.

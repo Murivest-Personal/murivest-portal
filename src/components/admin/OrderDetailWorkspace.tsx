@@ -109,7 +109,7 @@ export default function OrderDetailWorkspace({data}: {data: OrderDetailData}) {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="border border-border bg-card p-5">
+      <div className="rounded-card border border-border bg-card shadow-card p-5">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <div className="flex flex-wrap items-center gap-2">
@@ -160,7 +160,7 @@ export default function OrderDetailWorkspace({data}: {data: OrderDetailData}) {
             {order.status === 'ready' ? (
               <div className="flex w-full items-center gap-2 pt-2">
                 <input
-                  className="border border-border bg-background px-3 py-1.5 text-xs focus:border-gold focus:outline-none"
+                  className="rounded-standard border border-border bg-background px-3 py-1.5 text-xs focus:border-primary"
                   placeholder="Sanity document id to deliver into data room (optional)"
                   value={deliveryDocumentId}
                   onChange={(e) => setDeliveryDocumentId(e.target.value)}
@@ -201,7 +201,7 @@ export default function OrderDetailWorkspace({data}: {data: OrderDetailData}) {
                     {can.verifyPayments && p.status === 'submitted' ? (
                       <div className="mt-3 flex flex-wrap items-center gap-2">
                         <input
-                          className="min-w-48 flex-1 border border-border bg-background px-3 py-1.5 text-xs focus:border-gold focus:outline-none"
+                          className="min-w-48 flex-1 rounded-standard border border-border bg-background px-3 py-1.5 text-xs focus:border-primary"
                           placeholder="Verification note (optional)"
                           value={paymentNote}
                           onChange={(e) => setPaymentNote(e.target.value)}

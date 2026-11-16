@@ -5,7 +5,7 @@ import {useRouter} from 'next/navigation'
 import {Loader2, Send} from 'lucide-react'
 
 const input =
-  'w-full border border-border bg-background px-4 py-2.5 text-sm text-foreground focus:border-gold focus:outline-none'
+  'w-full rounded-standard border border-border bg-background px-4 py-2.5 text-sm text-foreground focus:border-primary'
 
 /** Inline enquiry form — posts to the Murivest desk with opportunity context. */
 export default function EnquiryForm({

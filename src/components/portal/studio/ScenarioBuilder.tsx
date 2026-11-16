@@ -8,7 +8,7 @@ import {fmtMoney, fmtNumber, fmtPct, fmtRatio, fmtYears} from '@/lib/format'
 import {CURRENCY_OPTIONS} from '@/lib/constants'
 import {cn} from '@/lib/utils'
 
-const input = 'w-full border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-gold focus:outline-none'
+const input = 'w-full rounded-standard border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary'
 const label = 'mb-1 block text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground'
 
 export const NEUTRAL_INPUTS: ScenarioInputs = {
@@ -142,7 +142,7 @@ export default function ScenarioBuilder({
       {error ? <div className="border-l-2 border-destructive bg-red-50 px-4 py-3 text-xs text-destructive">{error}</div> : null}
 
       {/* Model header */}
-      <div className="grid gap-3 border border-border bg-card p-4 sm:grid-cols-[1fr_auto] sm:items-end">
+      <div className="grid gap-3 rounded-card border border-border bg-card shadow-card p-4 sm:grid-cols-[1fr_auto] sm:items-end">
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="block">
             <span className={label}>Scenario name</span>
@@ -182,7 +182,7 @@ export default function ScenarioBuilder({
         {/* ================= INPUTS ================= */}
         <div className="min-w-0 space-y-6">
           {/* Acquisition */}
-          <section className="border border-border bg-card p-5">
+          <section className="rounded-card border border-border bg-card shadow-card p-5">
             <h3 className="mb-4 font-display text-lg text-primary">1 · Acquisition</h3>
             <div className="grid grid-cols-2 gap-4">
               <label className="block">
@@ -201,7 +201,7 @@ export default function ScenarioBuilder({
           </section>
 
           {/* Financing */}
-          <section className="border border-border bg-card p-5">
+          <section className="rounded-card border border-border bg-card shadow-card p-5">
             <div className="mb-4 flex items-center justify-between">
               <h3 className="font-display text-lg text-primary">2 · Financing structure</h3>
               <label className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -234,7 +234,7 @@ export default function ScenarioBuilder({
           </section>
 
           {/* Income */}
-          <section className="border border-border bg-card p-5">
+          <section className="rounded-card border border-border bg-card shadow-card p-5">
             <h3 className="mb-4 font-display text-lg text-primary">3 · Income assumptions</h3>
             <div className="grid grid-cols-2 gap-4">
               <label className="block">
@@ -257,7 +257,7 @@ export default function ScenarioBuilder({
           </section>
 
           {/* Exit */}
-          <section className="border border-border bg-card p-5">
+          <section className="rounded-card border border-border bg-card shadow-card p-5">
             <h3 className="mb-4 font-display text-lg text-primary">4 · Hold &amp; exit strategy</h3>
             <div className="grid grid-cols-2 gap-4">
               <label className="block">
@@ -385,7 +385,7 @@ export default function ScenarioBuilder({
           </section>
 
           {/* Views */}
-          <section className="border border-border bg-card">
+          <section className="rounded-card border border-border bg-card shadow-card">
             <div className="grid grid-cols-3 border-b border-border text-center text-[10px] uppercase tracking-[0.14em]">
               {(
                 [

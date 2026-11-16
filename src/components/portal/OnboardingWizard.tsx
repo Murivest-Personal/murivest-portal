@@ -6,7 +6,7 @@ import {ArrowLeft, ArrowRight, Building2, Check, Landmark, Loader2, ShieldCheck,
 import {cn} from '@/lib/utils'
 
 const input =
-  'w-full border border-border bg-background px-4 py-3 text-sm text-foreground focus:border-gold focus:outline-none'
+  'w-full rounded-standard border border-border bg-background px-4 py-3 text-sm text-foreground focus:border-primary'
 const label = 'mb-1.5 block text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground'
 
 export interface OnboardingDefaults {

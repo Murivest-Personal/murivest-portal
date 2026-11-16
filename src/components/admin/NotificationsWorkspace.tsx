@@ -322,13 +322,13 @@ export default function NotificationsWorkspace({canManage, canBroadcast}: {canMa
           description="Every in-app, push and email delivery attempt — who was told what, when, and with what outcome."
           actions={
             <div className="flex items-center gap-2">
-              <select value={channelFilter} onChange={(e) => setChannelFilter(e.target.value)} className="border border-border bg-background px-2 py-1.5 text-xs text-primary focus:border-gold focus:outline-none" aria-label="Filter channel">
+              <select value={channelFilter} onChange={(e) => setChannelFilter(e.target.value)} className="rounded-standard border border-border bg-background px-2 py-1.5 text-xs text-primary focus:border-primary" aria-label="Filter channel">
                 <option value="">All channels</option>
                 <option value="in_app">In-app</option>
                 <option value="push">Push</option>
                 <option value="email">Email</option>
               </select>
-              <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="border border-border bg-background px-2 py-1.5 text-xs text-primary focus:border-gold focus:outline-none" aria-label="Filter status">
+              <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="rounded-standard border border-border bg-background px-2 py-1.5 text-xs text-primary focus:border-primary" aria-label="Filter status">
                 <option value="">All statuses</option>
                 <option value="sent">Sent</option>
                 <option value="failed">Failed</option>
@@ -537,8 +537,8 @@ export default function NotificationsWorkspace({canManage, canBroadcast}: {canMa
       {/* Template editor modal */}
       {editKey && editing ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
-          <button type="button" aria-label="Close editor" onClick={() => setEditKey(null)} className="absolute inset-0 bg-forest-deep/70 backdrop-blur-sm" />
-          <div className="relative flex max-h-[88vh] w-full max-w-3xl flex-col border border-border bg-card shadow-2xl">
+          <button type="button" aria-label="Close editor" onClick={() => setEditKey(null)} className="absolute inset-0 bg-black/24 backdrop-blur-[2px]" />
+          <div className="rounded-card relative flex max-h-[88vh] w-full max-w-3xl flex-col border border-border bg-card shadow-overlay">
             <div className="flex items-center justify-between border-b border-border px-6 py-4">
               <div>
                 <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Email template</div>

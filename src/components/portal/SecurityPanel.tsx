@@ -6,7 +6,7 @@ import {Loader2, ShieldCheck, Smartphone, KeyRound, LogOut} from 'lucide-react'
 import {fmtDateTime, relativeTime} from '@/lib/format'
 import {cn} from '@/lib/utils'
 
-const input = 'w-full border border-border bg-background px-4 py-3 text-sm text-foreground focus:border-gold focus:outline-none'
+const input = 'w-full rounded-standard border border-border bg-background px-4 py-3 text-sm text-foreground focus:border-primary'
 const label = 'mb-1.5 block text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground'
 
 export interface SessionRow {
@@ -186,7 +186,7 @@ export default function SecurityPanel({
       {error ? <div className="border-l-2 border-destructive bg-red-50 px-4 py-3 text-xs text-destructive">{error}</div> : null}
 
       {/* Password */}
-      <section className="border border-border bg-card p-6">
+      <section className="rounded-card border border-border bg-card shadow-card p-6">
         <div className="mb-4 flex items-center gap-2">
           <KeyRound className="h-5 w-5 text-gold" />
           <h2 className="font-display text-xl text-primary">Password</h2>
@@ -210,7 +210,7 @@ export default function SecurityPanel({
       </section>
 
       {/* MFA */}
-      <section className="border border-border bg-card p-6">
+      <section className="rounded-card border border-border bg-card shadow-card p-6">
         <div className="mb-4 flex items-center gap-2">
           <Smartphone className="h-5 w-5 text-gold" />
           <h2 className="font-display text-xl text-primary">Two-factor authentication</h2>
@@ -289,7 +289,7 @@ export default function SecurityPanel({
       </section>
 
       {/* Sessions */}
-      <section className="border border-border bg-card p-6">
+      <section className="rounded-card border border-border bg-card shadow-card p-6">
         <div className="mb-4 flex items-center justify-between">
           <h2 className="font-display text-xl text-primary">Active sessions</h2>
           <button type="button" onClick={() => revoke()} disabled={busy} className="inline-flex items-center gap-2 border border-border px-4 py-2 text-[10px] uppercase tracking-[0.14em] text-muted-foreground hover:border-destructive hover:text-destructive disabled:opacity-60">
@@ -320,7 +320,7 @@ export default function SecurityPanel({
       </section>
 
       {/* Security events */}
-      <section className="border border-border bg-card p-6">
+      <section className="rounded-card border border-border bg-card shadow-card p-6">
         <h2 className="mb-4 font-display text-xl text-primary">Security history</h2>
         {events.length === 0 ? (
           <p className="text-xs text-muted-foreground">No security events recorded yet.</p>

@@ -33,6 +33,7 @@ import {getCriteria} from '@/lib/portal/data'
 import {matchOpportunity} from '@/lib/portal/matching'
 import {fmtMoney, fmtDate, relativeTime, humanizeStatus} from '@/lib/format'
 import {Metric, StatusBadge, EmptyState, SectionHeading} from '@/components/brand/primitives'
+import {StaggerGroup, StaggerItem} from '@/components/brand/motion'
 import OpportunityCard from '@/components/portal/OpportunityCard'
 import {isSanityConfigured} from '@/lib/sanity/client'
 
@@ -182,7 +183,7 @@ export default async function PortalOverviewPage() {
   return (
     <div className="space-y-10">
       {/* ============ Command header ============ */}
-      <section className="border border-border bg-card p-6 lg:p-8">
+      <section className="rounded-card border border-border bg-card p-6 shadow-card lg:p-8">
         <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <div className="eyebrow mb-2">Investor workspace</div>
@@ -199,16 +200,24 @@ export default async function PortalOverviewPage() {
               ) : null}
             </p>
           </div>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:max-w-xl">
-            {equityAvailable != null ? (
-              <Metric label="Equity available" value={fmtMoney(equityAvailable, currency, {compact: true})} tone="gold" />
-            ) : (
-              <Metric label="Equity available" value="Not stated" tone="gold" />
-            )}
-            <Metric label="Saved opportunities" value={String(savedIds.size)} sub="in your pipeline" />
-            <Metric label="Active orders" value={String(activeOrders.length)} sub="briefs in motion" />
-            <Metric label="Unread signals" value={String(unreadNotifications)} sub="notifications" />
-          </div>
+          <StaggerGroup className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:max-w-xl">
+            <StaggerItem>
+              {equityAvailable != null ? (
+                <Metric label="Equity available" value={fmtMoney(equityAvailable, currency, {compact: true})} tone="gold" />
+              ) : (
+                <Metric label="Equity available" value="Not stated" tone="gold" />
+              )}
+            </StaggerItem>
+            <StaggerItem>
+              <Metric label="Saved opportunities" value={String(savedIds.size)} sub="in your pipeline" />
+            </StaggerItem>
+            <StaggerItem>
+              <Metric label="Active orders" value={String(activeOrders.length)} sub="briefs in motion" />
+            </StaggerItem>
+            <StaggerItem>
+              <Metric label="Unread signals" value={String(unreadNotifications)} sub="notifications" />
+            </StaggerItem>
+          </StaggerGroup>
         </div>
 
         {/* Quick actions */}
@@ -223,7 +232,7 @@ export default async function PortalOverviewPage() {
             <Link
               key={a.href + a.label}
               href={a.href}
-              className="inline-flex items-center gap-2 border border-border px-4 py-2.5 text-[11px] font-medium uppercase tracking-[0.12em] text-primary transition-colors hover:border-gold hover:text-gold"
+              className="press-scale rounded-standard inline-flex items-center gap-2 border border-border px-4 py-2.5 text-[11px] font-medium uppercase tracking-[0.12em] text-primary transition-colors hover:border-gold hover:text-gold"
             >
               <a.icon className="h-3.5 w-3.5 text-gold/80" />
               {a.label}
@@ -234,7 +243,7 @@ export default async function PortalOverviewPage() {
 
       {/* ============ Verification & gating ============ */}
       <section className="grid gap-6 lg:grid-cols-[1.2fr_1fr]">
-        <div className="min-w-0 border border-border bg-card p-6">
+        <div className="rounded-card min-w-0 border border-border bg-card p-6 shadow-card">
           <div className="mb-4 flex items-center justify-between">
             <h2 className="font-display text-xl text-primary">Verification & access</h2>
             <StatusBadge status={ctx.profile?.verificationStatus || 'unverified'} />
@@ -242,7 +251,7 @@ export default async function PortalOverviewPage() {
           <ol className="space-y-3">
             {verificationSteps.map((s) => (
               <li key={s.label} className="flex items-center gap-3 text-sm">
-                <span className={`inline-flex h-5 w-5 items-center justify-center border ${s.done ? 'border-gold bg-gold/15 text-primary' : 'border-border text-muted-foreground/50'}`}>
+                <span className={`rounded-micro inline-flex h-5 w-5 items-center justify-center border ${s.done ? 'border-gold bg-gold/15 text-primary' : 'border-border text-muted-foreground/50'}`}>
                   {s.done ? <BadgeCheck className="h-3.5 w-3.5 text-gold" /> : null}
                 </span>
                 <span className={s.done ? 'text-primary' : 'text-muted-foreground'}>{s.label}</span>
@@ -250,7 +259,7 @@ export default async function PortalOverviewPage() {
             ))}
           </ol>
           {!ctx.profile?.ndaAccepted ? (
-            <div className="mt-5 border border-gold/40 bg-gold/5 p-4">
+            <div className="rounded-card mt-5 border border-gold/40 bg-gold/5 p-4">
               <p className="text-xs leading-relaxed text-primary">
                 <ShieldCheck className="mr-2 inline h-4 w-4 text-gold" />
                 Accept the confidentiality agreement to unlock confidential tiers of opportunities, briefs and data-room material.
@@ -267,7 +276,7 @@ export default async function PortalOverviewPage() {
           ) : null}
         </div>
 
-        <div className="min-w-0 border border-border bg-card p-6">
+        <div className="min-w-0 rounded-card border border-border bg-card shadow-card p-6">
           <h2 className="mb-4 font-display text-xl text-primary">Active criteria</h2>
           {criteria ? (
             <dl className="grid grid-cols-2 gap-4 text-sm">
@@ -350,7 +359,7 @@ export default async function PortalOverviewPage() {
       {/* ============ Pipeline in motion ============ */}
       <section className="grid gap-6 lg:grid-cols-3">
         {/* Orders */}
-        <div className="min-w-0 border border-border bg-card p-6">
+        <div className="min-w-0 rounded-card border border-border bg-card shadow-card p-6">
           <div className="mb-4 flex items-center justify-between">
             <h3 className="font-display text-lg text-primary">Orders</h3>
             <Link href="/portal/orders" className="text-[10px] uppercase tracking-[0.14em] text-gold hover:underline">
@@ -379,7 +388,7 @@ export default async function PortalOverviewPage() {
         </div>
 
         {/* Mandates */}
-        <div className="min-w-0 border border-border bg-card p-6">
+        <div className="min-w-0 rounded-card border border-border bg-card shadow-card p-6">
           <div className="mb-4 flex items-center justify-between">
             <h3 className="font-display text-lg text-primary">Mandates</h3>
             <Link href="/portal/mandates" className="text-[10px] uppercase tracking-[0.14em] text-gold hover:underline">
@@ -406,7 +415,7 @@ export default async function PortalOverviewPage() {
         </div>
 
         {/* Upcoming actions */}
-        <div className="min-w-0 border border-border bg-card p-6">
+        <div className="min-w-0 rounded-card border border-border bg-card shadow-card p-6">
           <h3 className="mb-4 font-display text-lg text-primary">Upcoming & outstanding</h3>
           <ul className="space-y-3 text-sm">
             {capitalCallsDue.map((c) => (
@@ -449,7 +458,7 @@ export default async function PortalOverviewPage() {
 
       {/* ============ Saved + recent + scenarios + portfolio ============ */}
       <section className="grid gap-6 lg:grid-cols-2">
-        <div className="min-w-0 border border-border bg-card p-6">
+        <div className="min-w-0 rounded-card border border-border bg-card shadow-card p-6">
           <div className="mb-4 flex items-center justify-between">
             <h3 className="font-display text-lg text-primary">Saved & recently viewed</h3>
             <Link href="/portal/discover" className="text-[10px] uppercase tracking-[0.14em] text-gold hover:underline">
@@ -489,7 +498,7 @@ export default async function PortalOverviewPage() {
         </div>
 
         <div className="min-w-0 space-y-6">
-          <div className="min-w-0 border border-border bg-card p-6">
+          <div className="min-w-0 rounded-card border border-border bg-card shadow-card p-6">
             <div className="mb-4 flex items-center justify-between">
               <h3 className="font-display text-lg text-primary">Saved analyses</h3>
               <Link href="/portal/studio" className="text-[10px] uppercase tracking-[0.14em] text-gold hover:underline">
@@ -518,7 +527,7 @@ export default async function PortalOverviewPage() {
             )}
           </div>
 
-          <div className="min-w-0 border border-border bg-card p-6">
+          <div className="min-w-0 rounded-card border border-border bg-card shadow-card p-6">
             <div className="mb-4 flex items-center justify-between">
               <h3 className="font-display text-lg text-primary">Portfolio snapshot</h3>
               <Link href="/portal/portfolio" className="text-[10px] uppercase tracking-[0.14em] text-gold hover:underline">
@@ -547,7 +556,7 @@ export default async function PortalOverviewPage() {
       </section>
 
       {/* ============ Advisor comms ============ */}
-      <section className="min-w-0 border border-border bg-card p-6">
+      <section className="rounded-card min-w-0 border border-border bg-card p-6 shadow-card">
         <div className="mb-4 flex items-center justify-between">
           <h3 className="font-display text-lg text-primary">From your Murivest desk</h3>
           <Link href="/portal/activity" className="text-[10px] uppercase tracking-[0.14em] text-gold hover:underline">

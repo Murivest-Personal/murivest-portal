@@ -39,7 +39,7 @@ export default function OpportunityCard({
   const showFinancials = !!o.financials?.noi || !!o.financials?.netYieldPct
 
   return (
-    <article className="group border border-border bg-card transition-colors hover:border-gold/40">
+    <article className="card-lift group overflow-hidden rounded-card border border-border bg-card shadow-card transition-colors hover:border-gold/40">
       <div className="flex flex-col gap-5 p-6 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
           <div className="mb-2 flex flex-wrap items-center gap-2">
@@ -113,14 +113,14 @@ export default function OpportunityCard({
               <SaveButton sanityId={o._id} initialSaved={saved} />
               <Link
                 href={`/portal/compare?add=${encodeURIComponent(o._id)}`}
-                className="inline-flex items-center justify-center border border-border px-3 py-2 text-[11px] font-medium uppercase tracking-[0.12em] text-primary transition-colors hover:border-gold hover:text-gold"
+                className="press-scale rounded-standard inline-flex items-center justify-center border border-border px-3 py-2 text-[11px] font-medium uppercase tracking-[0.12em] text-primary transition-colors hover:border-gold hover:text-gold"
               >
                 Compare
               </Link>
             </div>
             <Link
               href={`/portal/discover/${encodeURIComponent(o._id)}`}
-              className="inline-flex items-center justify-center gap-1.5 border border-primary bg-primary px-3 py-2 text-[11px] font-medium uppercase tracking-[0.12em] text-primary-foreground transition-colors hover:bg-forest-deep"
+              className="press-scale rounded-pill inline-flex items-center justify-center gap-1.5 border border-primary bg-primary px-4 py-2 text-[11px] font-medium uppercase tracking-[0.12em] text-primary-foreground shadow-card transition-colors hover:bg-forest-deep"
             >
               Opportunity detail <ArrowUpRight className="h-3.5 w-3.5" />
             </Link>

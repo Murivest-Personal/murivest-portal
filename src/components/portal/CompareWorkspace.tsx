@@ -10,7 +10,7 @@ import {EmptyState, StatusBadge} from '@/components/brand/primitives'
 import {assetClassLabel, structureLabel} from './OpportunityCard'
 import {cn} from '@/lib/utils'
 
-const selectCls = 'w-full border border-border bg-card px-3 py-2 text-xs text-foreground focus:border-gold focus:outline-none'
+const selectCls = 'w-full border border-border bg-card px-3 py-2 text-xs text-foreground focus:border-primary'
 
 export interface CompareOpportunity {
   doc: OpportunityDoc
@@ -254,7 +254,7 @@ export default function CompareWorkspace({
     <div className="space-y-8">
       {/* Selectors */}
       <div className="grid gap-4 lg:grid-cols-2">
-        <div className="min-w-0 border border-border bg-card p-5">
+        <div className="min-w-0 rounded-card border border-border bg-card shadow-card p-5">
           <div className="mb-3 flex items-center justify-between">
             <h3 className="font-display text-base text-primary">Opportunities</h3>
             <span className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">{oppIds.length}/{MAX_COLS} selected</span>
@@ -278,7 +278,7 @@ export default function CompareWorkspace({
           ) : null}
         </div>
 
-        <div className="min-w-0 border border-border bg-card p-5">
+        <div className="min-w-0 rounded-card border border-border bg-card shadow-card p-5">
           <div className="mb-3 flex items-center justify-between">
             <h3 className="font-display text-base text-primary">Saved scenarios</h3>
             <span className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">{scenIds.length}/{MAX_COLS} selected</span>
@@ -313,7 +313,7 @@ export default function CompareWorkspace({
           body="Pick up to four opportunities, saved Studio scenarios, or a mix. The matrix lines up pricing, yields, leverage assumptions, returns and risks side by side — exactly as an investment committee expects."
         />
       ) : (
-        <div className="overflow-x-auto border border-border bg-card">
+        <div className="overflow-x-auto rounded-card border border-border bg-card shadow-card">
           <table className="w-full min-w-160 text-sm">
             <thead>
               <tr className="border-b border-border text-left">
@@ -347,11 +347,11 @@ export default function CompareWorkspace({
       )}
 
       {/* Save row */}
-      <div className="flex flex-wrap items-end gap-3 border border-border bg-card p-4">
+      <div className="flex flex-wrap items-end gap-3 rounded-card border border-border bg-card shadow-card p-4">
         <label className="block flex-1 min-w-56">
           <span className="mb-1.5 block text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">Name this comparison</span>
           <input
-            className="w-full border border-border bg-background px-3 py-2.5 text-sm focus:border-gold focus:outline-none"
+            className="w-full rounded-standard border border-border bg-background px-3 py-2.5 text-sm focus:border-primary"
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="e.g. Q4 Nairobi office shortlist"
@@ -369,7 +369,7 @@ export default function CompareWorkspace({
         {saved.length === 0 ? (
           <p className="text-xs leading-relaxed text-muted-foreground">No saved comparisons yet — save one to preserve a shortlist for committee review or later reflection.</p>
         ) : (
-          <ul className="divide-y divide-border border border-border bg-card">
+          <ul className="divide-y divide-border rounded-card border border-border bg-card shadow-card">
             {saved.map((c) => (
               <li key={c.id} className="flex items-center justify-between gap-4 px-4 py-3">
                 <div className="min-w-0">
