@@ -1,6 +1,6 @@
 'use client'
 
-import {useState} from 'react'
+import {useEffect, useState} from 'react'
 import Link from 'next/link'
 import {usePathname, useRouter} from 'next/navigation'
 import {
@@ -24,6 +24,10 @@ import {
   Lock,
 } from 'lucide-react'
 import {cn} from '@/lib/utils'
+import NotificationBell from '@/components/portal/NotificationBell'
+import NotificationToaster from '@/components/portal/NotificationToaster'
+import InstallAppButton from '@/components/shared/InstallAppButton'
+import {ensureServiceWorker} from '@/lib/client/push'
 
 export interface AdminNavItem {
   href: string
@@ -49,6 +53,8 @@ const ICONS: Record<string, React.ComponentType<{className?: string; strokeWidth
 }
 
 export interface AdminShellProps {
+  /** Authed staff/admin user id — scopes the Realtime websocket channel. */
+  userId: string
   staffName: string
   roleLabel: string
   email: string
@@ -57,11 +63,22 @@ export interface AdminShellProps {
 }
 
 /** The internal operations rail — same visual language as the investor portal,
- *  unmistakably internal. Desktop-primary with solid tablet/mobile support. */
-export default function AdminShell({staffName, roleLabel, email, nav, children}: AdminShellProps) {
+ *  unmistakably internal. Desktop-primary with solid tablet/mobile support.
+ *
+ *  Staff and admins receive the same active-notification pipeline as
+ *  investors: Supabase Realtime websocket toasts, the shared Notification
+ *  Centre bell, Web Push to phone/desktop installs of this shell, and the
+ *  PWA install affordance. */
+export default function AdminShell({userId, staffName, roleLabel, email, nav, children}: AdminShellProps) {
   const pathname = usePathname()
   const router = useRouter()
   const [menuOpen, setMenuOpen] = useState(false)
+
+  // Register the Service Worker once per admin session — enables Web Push
+  // (desktop + installed PWA) and the offline notification cache.
+  useEffect(() => {
+    void ensureServiceWorker()
+  }, [])
 
   const closeMenu = () => setMenuOpen(false)
   const isActive = (href: string, exact?: boolean) =>
@@ -164,6 +181,8 @@ export default function AdminShell({staffName, roleLabel, email, nav, children}:
               </div>
             </div>
             <div className="flex items-center gap-2">
+              <InstallAppButton />
+              <NotificationBell settingsHref="/admin/notifications" activityHref="/admin" />
               <span className="hidden items-center gap-2 border border-gold/30 bg-gold/5 px-3 py-1.5 text-[10px] font-medium uppercase tracking-[0.14em] text-primary sm:inline-flex">
                 <ShieldCheck className="h-3 w-3 text-gold" />
                 {roleLabel}
@@ -174,6 +193,8 @@ export default function AdminShell({staffName, roleLabel, email, nav, children}:
         </header>
 
         <main className="mx-auto w-full max-w-[1440px] flex-1 px-5 py-8 lg:px-8 lg:py-10">{children}</main>
+
+        <NotificationToaster userId={userId} />
 
         <footer className="mt-auto border-t border-border">
           <div className="mx-auto flex max-w-[1440px] flex-col gap-2 px-5 py-6 text-[10px] uppercase tracking-[0.16em] text-muted-foreground sm:flex-row sm:items-center sm:justify-between lg:px-8">

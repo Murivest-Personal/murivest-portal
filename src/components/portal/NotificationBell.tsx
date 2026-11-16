@@ -23,12 +23,21 @@ import {cacheNotifications, readCachedNotifications, queueReadMarker, syncReadQu
 import {getPushState, enablePush, type PushState} from '@/lib/client/push'
 
 /**
- * Notification Centre — bell + drawer in the portal header.
+ * Notification Centre — bell + drawer, shared by the investor portal and
+ * the admin shell ("both investor and admin" active notifications).
  * Unread / All tabs, grouped by date, category icons, deep links, mark-as-read,
  * an enable-push prompt, and an offline cache fallback (IndexedDB) shared with
- * the Service Worker. The drawer anchors to the sticky portal header so it
+ * the Service Worker. The drawer anchors to the sticky shell header so it
  * never clips its corners on any screen width.
  */
+
+export interface NotificationBellProps {
+  /** Where the bell's "settings" affordance points (portal: preferences page,
+ *  admin: notifications workspace). */
+  settingsHref?: string
+  /** Where the "all activity" affordance points. */
+  activityHref?: string
+}
 
 const CATEGORY_ICONS: Record<string, React.ComponentType<{className?: string; strokeWidth?: number}>> = {
   documents: FolderLock,
@@ -68,7 +77,7 @@ function dateGroupLabel(iso: string): string {
   return 'Earlier'
 }
 
-export default function NotificationBell() {
+export default function NotificationBell({settingsHref = '/portal/notifications', activityHref = '/portal/activity'}: NotificationBellProps) {
   const [items, setItems] = useState<FeedItem[]>([])
   const [cached, setCached] = useState<FeedItem[]>([])
   const [open, setOpen] = useState(false)
@@ -215,7 +224,7 @@ export default function NotificationBell() {
                   <CheckCheck className="h-3.5 w-3.5" /> Mark all read
                 </button>
                 <Link
-                  href="/portal/notifications"
+                  href={settingsHref}
                   onClick={() => setOpen(false)}
                   aria-label="Notification settings"
                   className="text-muted-foreground transition-colors hover:text-gold"
@@ -351,14 +360,14 @@ export default function NotificationBell() {
 
             <div className="flex items-center justify-between border-t border-border px-4 py-2.5">
               <Link
-                href="/portal/notifications"
+                href={settingsHref}
                 onClick={() => setOpen(false)}
                 className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground hover:text-gold"
               >
                 Notification settings →
               </Link>
               <Link
-                href="/portal/activity"
+                href={activityHref}
                 onClick={() => setOpen(false)}
                 className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground hover:text-gold"
               >

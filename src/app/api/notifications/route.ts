@@ -5,6 +5,7 @@ import {requireApiUser, isResponse} from '@/lib/auth/context'
 import {parseBody} from '@/lib/api'
 import {getEffectivePreferences} from '@/lib/notifications/preferences'
 import {vapidPublicKey} from '@/lib/notifications/push'
+import {broadcastReadSync} from '@/lib/notifications/realtime'
 import type {NotificationRow} from '@/lib/db-types'
 
 const schema = z.object({ids: z.array(z.string().max(64)).max(100).optional(), all: z.boolean().optional()})
@@ -16,6 +17,7 @@ export async function POST(req: NextRequest) {
   const parsed = await parseBody(req, schema)
   if ('response' in parsed) return parsed.response
   const {ids, all} = parsed.data
+  let marked = false
 
   if (all) {
     unwrap(
@@ -26,6 +28,7 @@ export async function POST(req: NextRequest) {
         .is('read_at', null),
       'notifications.markAllRead',
     )
+    marked = true
   } else if (ids && ids.length > 0) {
     unwrap(
       await supabase
@@ -36,7 +39,13 @@ export async function POST(req: NextRequest) {
         .is('read_at', null),
       'notifications.markRead',
     )
+    marked = true
   }
+
+  // Realtime websocket ping so the user's OTHER devices (phone/desktop)
+  // clear their badge instantly instead of waiting for the next poll.
+  if (marked) void broadcastReadSync(guard.ctx.user.id)
+
   return NextResponse.json({ok: true})
 }
 

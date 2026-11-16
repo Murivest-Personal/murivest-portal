@@ -7,6 +7,7 @@ import {cn} from '@/lib/utils'
 import {relativeTime} from '@/lib/format'
 import {CATEGORY_LABELS, NOTIFICATION_CATEGORIES, CHANNELS, CHANNEL_LABELS, type NotificationCategory, type NotificationChannel} from '@/lib/notifications/events'
 import {getPushState, enablePush, disablePush, type PushState} from '@/lib/client/push'
+import InstallAppButton from '@/components/shared/InstallAppButton'
 
 /**
  * Full Notification Settings / preference centre.
@@ -409,6 +410,19 @@ export default function NotificationSettings({email}: {email: string}) {
               </div>
             ))
           )}
+        </div>
+      </section>
+
+      {/* ------------------------------------------------------------------ install */}
+      <section className="border border-border bg-card">
+        <div className="border-b border-border px-6 py-5">
+          <h2 className="text-sm font-semibold text-primary">Install the portal as an app</h2>
+          <p className="mt-1 max-w-xl text-xs leading-relaxed text-muted-foreground">
+            On phone and desktop the portal installs as a standalone app (Add to Home Screen / install icon). Installed, it opens full-screen and its notifications reach the device even when the app is closed.
+          </p>
+        </div>
+        <div className="divide-y divide-border">
+          <InstallAppButton variant="full" />
         </div>
       </section>
 

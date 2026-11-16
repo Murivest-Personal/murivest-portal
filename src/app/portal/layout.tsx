@@ -6,6 +6,7 @@ export default async function PortalLayout({children}: {children: React.ReactNod
 
   return (
     <PortalShell
+      userId={ctx.user.id}
       firstName={displayName(ctx)}
       classification={classificationLabel(ctx.profile)}
       tier={ctx.effectiveTier}

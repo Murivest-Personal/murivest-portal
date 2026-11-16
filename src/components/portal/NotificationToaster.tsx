@@ -15,16 +15,25 @@ import {
 } from 'lucide-react'
 import {cn} from '@/lib/utils'
 import {queueReadMarker} from '@/lib/client/notification-store'
+import {subscribeToUserNotifications} from '@/lib/client/realtime'
+import type {LiveNotification} from '@/lib/notifications/channels'
 
 /**
  * Real-time in-app notifications (spec §4):
- *  • subtle, non-blocking toasts while the investor is active (auto-dismiss,
+ *  • subtle, non-blocking toasts while the user is active (auto-dismiss,
  *    one quiet action button, hover pauses the timer);
  *  • a sparingly-used modal for high-importance events — Brief Delivered,
  *    Verification Approved / Access Tier changed, security-critical alerts.
  *
- * Fed by the SSE stream (/api/notifications/stream). When the tab is closed
- * the stream ends and background delivery continues via Web Push + email.
+ * Transport (in priority order):
+ *  1. Supabase Realtime websocket — the server broadcasts each new
+ *     notification on the signed-in user's per-user channel the moment it
+ *     is created; delivery is instant on phone and desktop, portal and
+ *     admin shell alike (requires NEXT_PUBLIC_SUPABASE_ANON_KEY);
+ *  2. SSE stream (/api/notifications/stream) — server-side polling
+ *     fallback when realtime is not configured.
+ * When the tab is closed both transports end and background delivery
+ * continues via Web Push (OS notifications) + email.
  */
 
 const CATEGORY_ICONS: Record<string, React.ComponentType<{className?: string; strokeWidth?: number}>> = {
@@ -41,16 +50,7 @@ const CATEGORY_ICONS: Record<string, React.ComponentType<{className?: string; st
 /** Events that justify interrupting deep work (kept deliberately short). */
 const MODAL_EVENTS = new Set(['order.delivered', 'security.verification_update', 'security.tier_changed'])
 
-interface StreamNotification {
-  id: string
-  category: string
-  event?: string | null
-  priority: string
-  title: string
-  body: string | null
-  link: string | null
-  createdAt: string
-}
+type StreamNotification = LiveNotification
 
 interface Toast extends StreamNotification {
   expiresAt: number
@@ -59,7 +59,7 @@ interface Toast extends StreamNotification {
 const TOAST_MS = 6500
 const MAX_TOASTS = 3
 
-export default function NotificationToaster() {
+export default function NotificationToaster({userId}: {userId?: string}) {
   const router = useRouter()
   const [toasts, setToasts] = useState<Toast[]>([])
   const [modal, setModal] = useState<StreamNotification | null>(null)
@@ -80,6 +80,7 @@ export default function NotificationToaster() {
 
   useEffect(() => {
     let es: EventSource | null = null
+    let unsubscribeRealtime: (() => void) | null = null
     let stopped = false
 
     const handle = (n: StreamNotification) => {
@@ -96,8 +97,19 @@ export default function NotificationToaster() {
       }
     }
 
-    const connect = () => {
-      if (stopped) return
+    const onRead = () => window.dispatchEvent(new CustomEvent('murivest:notifications-changed'))
+
+    const connectRealtime = () => {
+      // 1) Supabase Realtime websocket (anon key). The socket reconnects on
+      // drop; the shown-ids guard below keeps replays from double-toasting.
+      if (!userId) return false
+      unsubscribeRealtime = subscribeToUserNotifications(userId, {onNotification: handle, onRead})
+      return unsubscribeRealtime !== null
+    }
+
+    const connectStream = () => {
+      // 2) SSE fallback (server-side poll) — used when realtime is not
+      // configured or the websocket helper is unavailable.
       try {
         es = new EventSource('/api/notifications/stream')
         es.addEventListener('notification', (ev) => {
@@ -107,7 +119,7 @@ export default function NotificationToaster() {
             /* malformed frame — ignore */
           }
         })
-        es.addEventListener('read', () => window.dispatchEvent(new CustomEvent('murivest:notifications-changed')))
+        es.addEventListener('read', onRead)
         es.onerror = () => {
           // EventSource reconnects automatically; close long-dead sockets so
           // a signed-out tab does not hold connections open.
@@ -118,12 +130,13 @@ export default function NotificationToaster() {
       }
     }
 
-    connect()
+    if (!connectRealtime()) connectStream()
     return () => {
       stopped = true
+      unsubscribeRealtime?.()
       es?.close()
     }
-  }, [])
+  }, [userId])
 
   // Auto-dismiss timers.
   useEffect(() => {

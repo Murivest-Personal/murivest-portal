@@ -25,6 +25,7 @@ import {cn} from '@/lib/utils'
 import type {LucideIcon} from 'lucide-react'
 import NotificationBell from './NotificationBell'
 import NotificationToaster from './NotificationToaster'
+import InstallAppButton from '@/components/shared/InstallAppButton'
 import {ensureServiceWorker} from '@/lib/client/push'
 
 /** The twelve primary modules, in the specification's order. */
@@ -44,6 +45,8 @@ const NAV: {href: string; label: string; icon: LucideIcon; exact?: boolean}[] = 
 ]
 
 export interface PortalShellProps {
+  /** Authed user id — scopes the Realtime websocket channel + notifications feed. */
+  userId: string
   firstName: string
   classification: string
   tier: string
@@ -52,7 +55,7 @@ export interface PortalShellProps {
   children: React.ReactNode
 }
 
-export default function PortalShell({firstName, classification, tierLabel, email, children}: PortalShellProps) {
+export default function PortalShell({userId, firstName, classification, tierLabel, email, children}: PortalShellProps) {
   const pathname = usePathname()
   const router = useRouter()
   const [menuOpen, setMenuOpen] = useState(false)
@@ -162,6 +165,7 @@ export default function PortalShell({firstName, classification, tierLabel, email
               </div>
             </div>
             <div className="flex items-center gap-2">
+              <InstallAppButton />
               <NotificationBell />
               <Link
                 href="/portal/security"
@@ -180,7 +184,7 @@ export default function PortalShell({firstName, classification, tierLabel, email
 
         <main className="mx-auto w-full max-w-6xl flex-1 px-5 py-8 lg:px-8 lg:py-12">{children}</main>
 
-        <NotificationToaster />
+        <NotificationToaster userId={userId} />
 
         <footer className="mt-auto border-t border-border">
           <div className="mx-auto flex max-w-6xl flex-col gap-2 px-5 py-6 text-[10px] uppercase tracking-[0.16em] text-muted-foreground sm:flex-row sm:items-center sm:justify-between lg:px-8">

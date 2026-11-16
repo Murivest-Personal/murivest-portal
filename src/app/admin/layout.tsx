@@ -42,6 +42,7 @@ export default async function AdminLayout({children}: {children: React.ReactNode
 
   return (
     <AdminShell
+      userId={actx.auth.user.id}
       staffName={actx.auth.user.fullName || actx.auth.user.email}
       roleLabel={actx.role === 'super_admin' ? 'Super Administrator' : actx.role === 'ops_lead' ? 'Operations Lead' : actx.role === 'advisor' ? 'Advisor' : actx.role === 'compliance' ? 'Compliance / KYC' : actx.role === 'finance' ? 'Finance / Revenue' : actx.role === 'content' ? 'Content / Research' : 'Read-Only Analyst'}
       email={actx.auth.user.email}

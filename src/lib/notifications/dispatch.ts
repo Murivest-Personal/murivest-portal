@@ -30,6 +30,7 @@ import {
 import {getEffectivePreferences, digestEligible, inQuietHours, type EffectivePreferences} from './preferences'
 import {renderEmail} from './templates'
 import {sendPushToUser, maskEmail} from './push'
+import {broadcastNotification} from './realtime'
 
 /**
  * Central multi-channel dispatcher.
@@ -176,6 +177,20 @@ export async function notifyUser(params: NotifyParams): Promise<{notificationId:
       'notifications.create',
     )
     const notification = toCamel(notificationRow)
+
+    // Live leg — Supabase Realtime websocket: every open session (portal or
+    // admin shell, phone or desktop) toasts and refreshes its badge within
+    // milliseconds. Fire-and-forget; never blocks the business flow.
+    void broadcastNotification(params.userId, {
+      id: notification.id,
+      category: spec.category,
+      event: spec.event,
+      priority: spec.priority,
+      title: notification.title,
+      body: notification.body,
+      link: notification.link,
+      createdAt: notification.createdAt,
+    })
 
     // In-app delivery row (the row itself is the delivery).
     unwrap<NotificationDeliveryRow>(
