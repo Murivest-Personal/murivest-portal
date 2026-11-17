@@ -29,7 +29,7 @@ export interface MailMessage {
   html?: string
 }
 
-const FROM = process.env.MAIL_FROM || `${COMPANY.name} <office@murivest.com>`
+const FROM = process.env.SMTP_FROM || COMPANY.name
 
 function smtpConfigured(): boolean {
   return Boolean(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS)

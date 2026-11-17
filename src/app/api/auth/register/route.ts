@@ -6,7 +6,7 @@ import {createSession} from '@/lib/auth/login'
 import {issueAuthToken} from '@/lib/auth/tokens'
 import {audit, securityEvent} from '@/lib/auth/audit'
 import {sendMail} from '@/lib/mail'
-import {parseBody, ok, fail, clientMeta} from '@/lib/api'
+import {parseBody, fail, clientMeta} from '@/lib/api'
 import {COMPANY} from '@/lib/constants'
 import type {UserRow} from '@/lib/db-types'
 
@@ -38,38 +38,62 @@ export async function POST(req: NextRequest) {
       .single(),
     'user.create',
   )
-  unwrap<null>(
-    await supabase
-      .from('investor_profiles')
-      .insert({
-        id: newId(),
-        user_id: userRow.id,
-        ...(intent ? {classification: intent} : {}),
-        created_at: nowIso(),
-        updated_at: nowIso(),
-      }),
-    'investorProfile.create',
-  )
 
-  // Email verification
-  const token = await issueAuthToken(userRow.id, 'email_verify')
-  const verifyUrl = `${(process.env.NEXT_PUBLIC_SITE_URL || COMPANY.siteUrl).replace(/\/$/, '')}/api/auth/verify-email?token=${encodeURIComponent(token)}`
+  // Investor profile — core to registration; surface as error if it fails.
+  try {
+    unwrap<null>(
+      await supabase
+        .from('investor_profiles')
+        .insert({
+          id: newId(),
+          user_id: userRow.id,
+          ...(intent ? {classification: intent} : {}),
+          created_at: nowIso(),
+          updated_at: nowIso(),
+        }),
+      'investorProfile.create',
+    )
+  } catch (err) {
+    console.error('[register:investorProfile]', err)
+    return fail('Account created but profile setup failed. Please sign in.', 500)
+  }
+
+  // Email verification token — best effort; registration still completes without it.
+  let token: string | null = null
+  try {
+    token = await issueAuthToken(userRow.id, 'email_verify')
+  } catch (err) {
+    console.error('[register:issueAuthToken]', err)
+  }
+
+  const verifyUrl = token
+    ? `${(process.env.NEXT_PUBLIC_SITE_URL || COMPANY.siteUrl).replace(/\/$/, '')}/api/auth/verify-email?token=${encodeURIComponent(token)}`
+    : null
   const mail = await sendMail({
     to: email,
     subject: 'Verify your email — Murivest Private Capital Portal',
-    text: `Welcome to the Murivest private capital environment.\n\nVerify your email address to begin institutional onboarding:\n${verifyUrl}\n\nThis link expires in 72 hours.\n\n${COMPANY.legalName}\n${COMPANY.phone} · ${COMPANY.email}`,
+    text: `Welcome to the Murivest private capital environment.\n\n${verifyUrl ? `Verify your email address to begin institutional onboarding:\n${verifyUrl}\n` : ''}This link expires in 72 hours.\n\n${COMPANY.legalName}\n${COMPANY.phone} · ${COMPANY.email}`,
   })
 
-  // Immediate session (gated experience drives verification + onboarding)
-  const {token: sessionToken} = await createSession(userRow.id, req)
+  // Immediate session — best effort; registration still completes without it.
+  let sessionToken: string | null = null
+  try {
+    const {token: st} = await createSession(userRow.id, req)
+    sessionToken = st
+  } catch (err) {
+    console.error('[register:createSession]', err)
+  }
+
   const res = NextResponse.json({ok: true, next: 'onboarding', devLink: mail.devLink})
-  res.cookies.set('mvr_session', sessionToken, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'lax',
-    path: '/',
-    maxAge: 30 * 24 * 60 * 60,
-  })
+  if (sessionToken) {
+    res.cookies.set('mvr_session', sessionToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      path: '/',
+      maxAge: 30 * 24 * 60 * 60,
+    })
+  }
 
   const meta = clientMeta(req)
   await audit({actorId: userRow.id, action: 'auth.register', entity: 'user', entityId: userRow.id, ...meta})
