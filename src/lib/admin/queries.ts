@@ -50,7 +50,7 @@ import type {
 const ADMIN_OPP_PROJECTION = `{
   _id, title, "slug": slug.current, status, accessTier, assetClass, geography,
   dealStructure, indicativePrice, investmentSizeMin, investmentSizeMax,
-  financials, summary, auctionUrl, featured, publishDate
+  financials, summary, auctionUrl, featured, publishDate, kycBuyerForm
 }`
 
 export const getAdminOpportunities = cache(async (): Promise<OpportunityDoc[]> => {
@@ -58,6 +58,15 @@ export const getAdminOpportunities = cache(async (): Promise<OpportunityDoc[]> =
   if (!client) return []
   return client.fetch(
     `*[_type == "opportunity" && defined(published) && published == true] | order(publishDate desc, title asc) ${ADMIN_OPP_PROJECTION}`,
+  )
+})
+
+export const getAdminOpportunityById = cache(async (id: string): Promise<OpportunityDoc | null> => {
+  const client = sanityClient()
+  if (!client) return null
+  return client.fetch(
+    `*[_type == "opportunity" && _id == $id][0] ${ADMIN_OPP_PROJECTION}`,
+    {id},
   )
 })
 
@@ -1049,6 +1058,7 @@ export async function opportunityInventory() {
       publishDate: op?.publishDate ?? null,
       auctionUrl: op?.auctionUrl ?? null,
       featuredInSanity: op?.featured ?? false,
+      kycBuyerForm: op?.kycBuyerForm ?? null,
       // governance meta
       metaStatus: meta?.status ?? null,
       metaTags: (meta?.tags as string[] | null) ?? [],

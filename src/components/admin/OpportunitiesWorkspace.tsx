@@ -26,6 +26,7 @@ export interface OpportunityRow {
   saves: number
   orders: number
   revenueUsd: number
+  kycBuyerForm?: unknown | null
 }
 
 export default function OpportunitiesWorkspace({
@@ -34,12 +35,14 @@ export default function OpportunitiesWorkspace({
   studioUrl,
   canManage,
   canExport,
+  canDownloadKyc,
 }: {
   rows: OpportunityRow[]
   sanityConfigured: boolean
   studioUrl: string
   canManage: boolean
   canExport: boolean
+  canDownloadKyc: boolean
 }) {
   const router = useRouter()
   const [selected, setSelected] = useState<Set<string>>(new Set())
@@ -191,6 +194,16 @@ export default function OpportunitiesWorkspace({
                       {r.indicativePrice?.amount != null ? ` · ${fmtMoney(r.indicativePrice.amount, r.indicativePrice.currency ?? 'USD', {compact: true})}` : ''}
                       {r.auctionUrl ? <a href={r.auctionUrl} target="_blank" rel="noreferrer" className="ml-1 text-gold-deep hover:text-gold">auctions.murivest.com ↗</a> : null}
                     </div>
+                    {canDownloadKyc && (
+                      <a
+                        href={`/api/admin/kyc-form?sanityId=${encodeURIComponent(r.sanityId)}`}
+                        className="mt-1 inline-flex items-center gap-1 border border-border rounded px-2 py-0.5 text-[9px] font-medium uppercase tracking-[0.1em] text-primary hover:border-gold hover:text-gold"
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        <Download className="h-2.5 w-2.5" /> KYC PDF
+                      </a>
+                    )}
                   </td>
                   <td className="px-3 align-top">
                     <StatusPill status={r.status} />

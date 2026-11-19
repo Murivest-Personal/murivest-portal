@@ -539,6 +539,11 @@ CREATE INDEX audit_logs_created_idx    ON audit.logs (created_at);
 CREATE INDEX audit_logs_actor_idx      ON audit.logs (actor_id, created_at);
 CREATE INDEX audit_logs_entity_idx     ON audit.logs (entity, entity_id);
 
+-- Server-side client connects as service_role (bypasses RLS) but still needs
+-- schema-level USAGE and table privileges to reach the `audit` schema.
+GRANT USAGE ON SCHEMA audit TO service_role;
+GRANT SELECT, INSERT ON audit.logs TO service_role;
+
 -- -----------------------------------------------------------------------------
 -- Shared triggers: updated_at maintenance + critical-action audit capture
 -- -----------------------------------------------------------------------------

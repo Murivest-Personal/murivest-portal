@@ -1,5 +1,5 @@
 import Link from 'next/link'
-import {Eye, MapPin, Layers, Building2, ArrowUpRight} from 'lucide-react'
+import {Eye, MapPin, Layers, Building2, ArrowUpRight, Lock, ExternalLink, Gavel, Globe} from 'lucide-react'
 import type {OpportunityDoc} from '@/lib/sanity/types'
 import {fmtMoney} from '@/lib/format'
 import {InlineTag, StatusBadge} from '@/components/brand/primitives'
@@ -16,27 +16,40 @@ export function statusLabel(v: string) {
   return OPPORTUNITY_STATUS_OPTIONS.find((o) => o.value === v)?.label || v
 }
 
-/**
- * Opportunity card — institutional presentation, never marketplace-y.
- * Only tier-permitted financial fields reach the client; the component
- * renders "not disclosed" for fields the studio left empty rather than
- * fabricating anything.
- */
+export function listingTypeLabel(type?: string | null) {
+  switch (type) {
+    case 'off_market':
+      return 'Off-market'
+    case 'auction':
+      return 'Auction'
+    case 'available_by_country':
+      return 'Available by Country'
+    default:
+      return '—'
+  }
+}
+
+interface OpportunityCardProps {
+  opportunity: OpportunityDoc & {publicDetailUrl?: string | null; isOffMarket?: boolean}
+  saved: boolean
+  matchedTags?: string[]
+  viewCount?: number
+  onSaveToggle?: () => void
+}
+
 export default function OpportunityCard({
   opportunity,
   saved,
   matchedTags,
   viewCount,
-}: {
-  opportunity: OpportunityDoc
-  saved: boolean
-  matchedTags?: string[]
-  viewCount?: number
-}) {
+  onSaveToggle,
+}: OpportunityCardProps) {
   const o = opportunity
   const geo = [o.geography?.district, o.geography?.city, o.geography?.country].filter(Boolean).join(' · ')
   const price = o.indicativePrice
   const showFinancials = !!o.financials?.noi || !!o.financials?.netYieldPct
+  const publicUrl = o.publicDetailUrl
+  const isOffMarket = o.isOffMarket || o.listingType === 'off_market'
 
   return (
     <article className="card-lift group overflow-hidden rounded-card border border-border bg-card shadow-card transition-colors hover:border-gold/40">
@@ -44,6 +57,14 @@ export default function OpportunityCard({
         <div className="min-w-0">
           <div className="mb-2 flex flex-wrap items-center gap-2">
             <StatusBadge status={o.status} />
+            {o.listingType && (
+              <InlineTag className={`!bg-${o.listingType === 'off_market' ? 'gold/15' : o.listingType === 'auction' ? 'primary/10' : 'emerald/15'} !text-${o.listingType === 'off_market' ? 'primary' : o.listingType === 'auction' ? 'primary' : 'emerald'}`}>
+                {o.listingType === 'off_market' && <Lock className="h-3 w-3 mr-1" />}
+                {o.listingType === 'auction' && <Gavel className="h-3 w-3 mr-1" />}
+                {o.listingType === 'available_by_country' && <Globe className="h-3 w-3 mr-1" />}
+                {listingTypeLabel(o.listingType)}
+              </InlineTag>
+            )}
             {o.status === 'auction' ? <InlineTag className="!bg-gold/15 !text-primary">Auction asset</InlineTag> : null}
             {matchedTags?.map((t) => (
               <InlineTag key={t} className="!bg-primary/5 !text-primary">{t}</InlineTag>
@@ -98,7 +119,15 @@ export default function OpportunityCard({
           {price?.amount != null ? (
             <div>
               <div className="eyebrow mb-1">Indicative</div>
-              <div className="tabular font-display text-2xl text-primary">{fmtMoney(price.amount, price.currency || 'USD')}</div>
+              <div className="tabular font-display text-2xl text-primary">
+                {price.display || fmtMoney(price.amount, price.currency || 'USD')}
+              </div>
+              {price.basis ? <div className="text-[11px] text-muted-foreground">{price.basis}</div> : null}
+            </div>
+          ) : price?.display ? (
+            <div>
+              <div className="eyebrow mb-1">Guide</div>
+              <div className="font-display text-lg text-primary">{price.display}</div>
               {price.basis ? <div className="text-[11px] text-muted-foreground">{price.basis}</div> : null}
             </div>
           ) : (
@@ -110,7 +139,7 @@ export default function OpportunityCard({
 
           <div className="flex w-full flex-col gap-2 lg:items-stretch">
             <div className="flex gap-2">
-              <SaveButton sanityId={o._id} initialSaved={saved} />
+              <SaveButton sanityId={o._id} initialSaved={saved} onToggle={onSaveToggle} />
               <Link
                 href={`/portal/compare?add=${encodeURIComponent(o._id)}`}
                 className="press-scale rounded-standard inline-flex items-center justify-center border border-border px-3 py-2 text-[11px] font-medium uppercase tracking-[0.12em] text-primary transition-colors hover:border-gold hover:text-gold"
@@ -118,12 +147,23 @@ export default function OpportunityCard({
                 Compare
               </Link>
             </div>
-            <Link
-              href={`/portal/discover/${encodeURIComponent(o._id)}`}
-              className="press-scale rounded-pill inline-flex items-center justify-center gap-1.5 border border-primary bg-primary px-4 py-2 text-[11px] font-medium uppercase tracking-[0.12em] text-primary-foreground shadow-card transition-colors hover:bg-forest-deep"
-            >
-              Opportunity detail <ArrowUpRight className="h-3.5 w-3.5" />
-            </Link>
+            {publicUrl && !isOffMarket ? (
+              <a
+                href={publicUrl}
+                target="_blank"
+                rel="noreferrer noopener"
+                className="press-scale rounded-pill inline-flex items-center justify-center gap-1.5 border border-primary bg-primary px-4 py-2 text-[11px] font-medium uppercase tracking-[0.12em] text-primary-foreground shadow-card transition-colors hover:bg-forest-deep"
+              >
+                View on Public Site <ExternalLink className="h-3.5 w-3.5" />
+              </a>
+            ) : (
+              <Link
+                href={`/portal/discover/${encodeURIComponent(o._id)}`}
+                className="press-scale rounded-pill inline-flex items-center justify-center gap-1.5 border border-primary bg-primary px-4 py-2 text-[11px] font-medium uppercase tracking-[0.12em] text-primary-foreground shadow-card transition-colors hover:bg-forest-deep"
+              >
+                Opportunity Detail <ArrowUpRight className="h-3.5 w-3.5" />
+              </Link>
+            )}
           </div>
         </div>
       </div>
@@ -138,6 +178,12 @@ export default function OpportunityCard({
           <Eye className="h-3.5 w-3.5 text-gold" /> View auction listing — auctions.murivest.com <ArrowUpRight className="h-3 w-3" />
         </a>
       ) : null}
+
+      {isOffMarket && (
+        <div className="flex items-center gap-2 border-t border-gold/30 bg-gold/5 px-6 py-2.5 text-[11px] uppercase tracking-[0.14em] text-primary">
+          <Lock className="h-3.5 w-3.5 text-gold" /> Off-market property — details only available in portal
+        </div>
+      )}
     </article>
   )
 }

@@ -6,6 +6,14 @@
  */
 
 export type AccessTier = 'tier_1' | 'tier_2' | 'tier_3'
+export type DiscoverDocumentType =
+  | 'opportunity'
+  | 'auctionProperty'
+  | 'property'
+  | 'ukProperty'
+  | 'uaeProperty'
+  | 'sgProperty'
+  | 'usProperty'
 
 export interface SanityImage {
   _key?: string
@@ -34,10 +42,15 @@ export interface LeaseLine {
 
 export interface OpportunityDoc {
   _id: string
-  _type: 'opportunity'
+  _type: DiscoverDocumentType
   title: string
   slug?: {current?: string} | null
   status: 'off_market' | 'marketed' | 'auction' | 'under_offer' | 'closed'
+  listingType?: 'off_market' | 'auction' | 'available_by_country' | null
+  country?: string | null
+  publicDetailUrl?: string | null
+  sanityProjectId?: string | null
+  sanityDataset?: string | null
   accessTier: AccessTier
   assetClass?: string | null
   geography?: {
@@ -51,20 +64,106 @@ export interface OpportunityDoc {
     amount?: number | null
     currency?: string | null
     basis?: string | null
+    display?: string | null
   } | null
   investmentSizeMin?: number | null
   investmentSizeMax?: number | null
   financials?: OpportunityFinancials | null
   leaseProfile?: LeaseLine[] | null
   summary?: string | null
-  investmentRationale?: unknown[] | null // portable text — rendered with a minimal block renderer
+  investmentRationale?: unknown[] | null
   keyRisks?: string[] | null
   auctionUrl?: string | null
   images?: SanityImage[] | null
   documents?: {_key: string; _ref: string}[] | null
   featured?: boolean | null
+  isOffMarket?: boolean | null
   availableBriefs?: {_key: string; _ref: string}[] | null
   publishDate?: string | null
+  kycBuyerForm?: KYCBuyerForm | null
+}
+
+export interface BeneficialOwner {
+  name?: string | null
+  idPassport?: string | null
+}
+
+export interface KYCIndividualDetails {
+  fullName?: string | null
+  idPassportNumber?: string | null
+  nationality?: string | null
+  dateOfBirth?: string | null
+  kraPin?: string | null
+  phoneNumber?: string | null
+  emailAddress?: string | null
+  currentResidentialAddress?: string | null
+  postalAddress?: string | null
+}
+
+export interface KYCCompanyDetails {
+  companyName?: string | null
+  registrationNumber?: string | null
+  dateOfIncorporation?: string | null
+  countryOfIncorporation?: string | null
+  registeredOfficeAddress?: string | null
+  companyKraPin?: string | null
+  contactPerson?: string | null
+  designation?: string | null
+  contactEmail?: string | null
+  contactPhone?: string | null
+  directors?: string[] | null
+}
+
+export interface KYCTransactionDetails {
+  propertyDescription?: string | null
+  assetType?: string | null
+  estimatedPurchasePrice?: string | null
+  modeOfFinancing?: string | null
+  financingOther?: string | null
+  intendedUse?: string | null
+  intendedUseOther?: string | null
+}
+
+export interface KYCSourceOfFunds {
+  sourceOfFundsDetail?: string | null
+  bankStatementsAttached?: boolean | null
+  loanApprovalLetterAttached?: boolean | null
+  saleAgreementAttached?: boolean | null
+  otherSupportingDocumentsAttached?: boolean | null
+}
+
+export interface KYCDeclarations {
+  isPep?: string | null
+  pepDetails?: string | null
+  beneficialOwners?: BeneficialOwner[] | null
+  consent?: string | null
+  signedBy?: string | null
+  signedDate?: string | null
+  capacity?: string | null
+}
+
+export interface KYCDocumentsToAttach {
+  idPassportCopy?: boolean | null
+  certificateOfIncorporation?: boolean | null
+  kraPinDoc?: boolean | null
+  cr12?: boolean | null
+  proofOfAddress?: boolean | null
+  companyKraPinDoc?: boolean | null
+  passportPhotos?: boolean | null
+  boardResolution?: boolean | null
+  sourceOfFundsDocs?: boolean | null
+  directorsIdsPins?: boolean | null
+  beneficialOwnershipForm?: boolean | null
+}
+
+export interface KYCBuyerForm {
+  buyerType?: string | null
+  individual?: KYCIndividualDetails | null
+  company?: KYCCompanyDetails | null
+  transaction?: KYCTransactionDetails | null
+  sourceOfFunds?: KYCSourceOfFunds | null
+  declarations?: KYCDeclarations | null
+  documents?: KYCDocumentsToAttach | null
 }
 
 export interface BriefPricing {

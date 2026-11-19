@@ -22,6 +22,7 @@ export default async function AdminOpportunitiesPage() {
         studioUrl={studioUrl}
         canManage={actx.can('opportunities.manage')}
         canExport={actx.can('export.data')}
+        canDownloadKyc={actx.can('compliance.view')}
       />
     </div>
   )

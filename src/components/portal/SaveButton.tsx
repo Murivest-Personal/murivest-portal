@@ -9,10 +9,12 @@ export default function SaveButton({
   sanityId,
   initialSaved,
   compact,
+  onToggle,
 }: {
   sanityId: string
   initialSaved: boolean
   compact?: boolean
+  onToggle?: (saved: boolean) => void
 }) {
   const router = useRouter()
   const [saved, setSaved] = useState(initialSaved)
@@ -27,7 +29,11 @@ export default function SaveButton({
         body: JSON.stringify({sanityId}),
       })
       const data = await res.json()
-      if (res.ok) setSaved(!!data.saved)
+      if (res.ok) {
+        const newSaved = !!data.saved
+        setSaved(newSaved)
+        onToggle?.(newSaved)
+      }
       router.refresh()
     } catch {
       /* keep prior state */

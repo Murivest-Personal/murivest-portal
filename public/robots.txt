@@ -7,4 +7,4 @@ Disallow: /portal
 Disallow: /api
 Disallow: /reset-password
 
-Sitemap: https://portal.murivest.com/sitemap.xml
+Sitemap: https://investors.murivest.com/sitemap.xml

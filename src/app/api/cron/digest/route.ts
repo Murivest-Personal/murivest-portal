@@ -6,7 +6,7 @@ export const dynamic = 'force-dynamic'
 
 /**
  * Digest batch — schedule externally (cron / pg_cron / Vercel cron):
- *   curl -X POST https://portal.murivest.com/api/cron/digest \
+ *   curl -X POST https://investors.murivest.com/api/cron/digest \
  *        -H "Authorization: Bearer $CRON_SECRET"
  *
  * Sends every opted-in investor's digest (daily or weekly per their

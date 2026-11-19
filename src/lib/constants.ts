@@ -15,7 +15,7 @@ export const COMPANY = {
   additionalOffices: 'Principal offices: Nairobi · London',
   coverage: ['Kenya', 'East Africa', 'United Kingdom', 'International markets'],
   auctionsUrl: 'https://auctions.murivest.com',
-  siteUrl: process.env.NEXT_PUBLIC_SITE_URL || 'https://portal.murivest.com',
+  siteUrl: process.env.NEXT_PUBLIC_SITE_URL || 'https://investors.murivest.com',
 } as const
 
 export const BRAND = {

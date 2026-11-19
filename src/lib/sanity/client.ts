@@ -1,36 +1,74 @@
 import {createClient, type SanityClient} from '@sanity/client'
+import type {DiscoverSource} from '@/sanity/lib/constants'
 
-/**
- * Server-only Sanity client.
- *
- * - All Sanity access in the portal happens on the server (RSC / route
- *   handlers) so the read token for private datasets never reaches the
- *   browser.
- * - When SANITY_PROJECT_ID is not configured the portal serves purposeful
- *   empty states ("content awaiting publication") — it never fabricates
- *   sample data.
- */
+type SanityProject = 'portal' | 'auction' | 'listings'
 
-let cached: SanityClient | null | undefined
+const projectConfig: Record<
+  SanityProject,
+  {projectId?: string; dataset?: string; apiVersion?: string; token?: string}
+> = {
+  portal: {
+    projectId: process.env.SANITY_PROJECT_ID,
+    dataset: process.env.SANITY_DATASET,
+    apiVersion: process.env.SANITY_API_VERSION,
+    token: process.env.SANITY_API_READ_TOKEN,
+  },
+  auction: {
+    projectId: process.env.SANITY_AUCTION_PROJECT_ID,
+    dataset: process.env.SANITY_AUCTION_DATASET,
+    apiVersion: process.env.SANITY_AUCTION_API_VERSION,
+    token: process.env.SANITY_AUCTION_READ_TOKEN,
+  },
+  listings: {
+    projectId: process.env.SANITY_LISTINGS_PROJECT_ID,
+    dataset: process.env.SANITY_LISTINGS_DATASET,
+    apiVersion: process.env.SANITY_LISTINGS_API_VERSION,
+    token: process.env.SANITY_LISTINGS_READ_TOKEN,
+  },
+}
 
-export function sanityClient(): SanityClient | null {
-  if (cached !== undefined) return cached
-  const projectId = process.env.SANITY_PROJECT_ID
-  if (!projectId || projectId === 'your-project-id') {
-    cached = null
-    return cached
+const clients: Partial<Record<SanityProject, SanityClient | null>> = {}
+
+export function sanityClientFor(project: SanityProject): SanityClient | null {
+  if (project in clients) return clients[project] ?? null
+
+  const config = projectConfig[project]
+  if (!config.projectId || config.projectId === 'your-project-id') {
+    clients[project] = null
+    return null
   }
-  cached = createClient({
-    projectId,
-    dataset: process.env.SANITY_DATASET || 'production',
-    apiVersion: process.env.SANITY_API_VERSION || '2025-01-01',
-    useCdn: process.env.SANITY_USE_CDN === 'true', // institutional data: default to fresh reads
-    token: process.env.SANITY_API_READ_TOKEN || undefined,
+
+  clients[project] = createClient({
+    projectId: config.projectId,
+    dataset: config.dataset || 'production',
+    apiVersion: config.apiVersion || '2024-01-01',
+    useCdn: true,
+    token: config.token || undefined,
     perspective: 'published',
   })
-  return cached
+
+  return clients[project] ?? null
+}
+
+// Existing portal queries and admin code keep using the portal project.
+export function sanityClient(): SanityClient | null {
+  return sanityClientFor('portal')
 }
 
 export function isSanityConfigured(): boolean {
-  return sanityClient() !== null
+  return sanityClientFor('portal') !== null
+}
+
+export function isDiscoverSanityConfigured(source: DiscoverSource): boolean {
+  if (source === 'off_market') return sanityClientFor('portal') !== null
+  if (source === 'auction') return sanityClientFor('auction') !== null
+  if (source === 'all') {
+    return (
+      sanityClientFor('portal') !== null ||
+      sanityClientFor('auction') !== null ||
+      sanityClientFor('listings') !== null
+    )
+  }
+
+  return sanityClientFor('listings') !== null
 }
