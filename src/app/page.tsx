@@ -223,11 +223,9 @@ const AUDIENCES = [
   },
 ]
 
-export default async function LandingPage({searchParams}: {searchParams: Promise<{auth?: string}>}) {
-  const {auth} = await searchParams
+export default async function LandingPage() {
   const [ctx, landing] = await Promise.all([getAuthContext(), getLandingContent()])
   const isAuthenticated = !!ctx
-  const authRequired = auth === 'required'
 
   const hero = {
     eyebrow: landing?.heroEyebrow || 'Murivest Group · Private & Institutional Capital · Nairobi | London',
@@ -257,7 +255,7 @@ export default async function LandingPage({searchParams}: {searchParams: Promise
   const signatureName = directorName || 'The Director'
 
   return (
-    <AuthModalProvider authRequired={authRequired}>
+    <AuthModalProvider>
       <script type="application/ld+json" dangerouslySetInnerHTML={{__html: JSON.stringify(jsonLd)}} />
       <script type="application/ld+json" dangerouslySetInnerHTML={{__html: JSON.stringify(faqJsonLd)}} />
       <div className="flex min-h-screen flex-col bg-background">
@@ -731,6 +729,26 @@ export default async function LandingPage({searchParams}: {searchParams: Promise
             </div>
             <div className="text-xs leading-relaxed text-ivory/60">
               <div className="eyebrow mb-3 !text-gold/70">Resources</div>
+              <p>
+                <Link href="/differential-underwriting" className="text-ivory/80 transition-colors hover:text-gold">
+                  Differential Underwriting — the method
+                </Link>
+              </p>
+              <p>
+                <Link href="/underwriting-calculator" className="text-ivory/80 transition-colors hover:text-gold">
+                  Underwriting calculator
+                </Link>
+              </p>
+              <p>
+                <Link href="/insights" className="text-ivory/80 transition-colors hover:text-gold">
+                  Insights — billionaire playbooks &amp; desk research
+                </Link>
+              </p>
+              <p>
+                <Link href="/billionaire-real-estate" className="text-ivory/80 transition-colors hover:text-gold">
+                  The UHNW desk
+                </Link>
+              </p>
               <p>
                 <a href={MANUAL_PATH} className="text-ivory/80 transition-colors hover:text-gold">
                   Investor portal manual (PDF)
