@@ -473,7 +473,7 @@ export default function OrdersList({ initialOrders }: OrdersListProps) {
             to request detailed analysis on specific opportunities.
           </p>
           <Link
-            to="/portal/briefs"
+            to="/portal/property-briefs"
             className="inline-block bg-forest text-white px-6 py-3 text-xs uppercase tracking-[0.15em] hover:bg-forest-soft transition-colors"
           >
             Browse Briefs

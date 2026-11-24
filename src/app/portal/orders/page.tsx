@@ -53,6 +53,7 @@ export default async function OrdersPage({
     createdAt: o.createdAt,
     deliveredAt: o.deliveredAt ?? null,
     customScope: o.customScope,
+    deliveryCostUsd: o.deliveryCostUsd ?? 0,
   }))
 
   return (

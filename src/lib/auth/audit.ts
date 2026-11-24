@@ -1,4 +1,12 @@
-import {auditTable, supabase, newId, nowIso} from '@/lib/supabase'
+import {
+  auditTable,
+  supabase,
+  newId,
+  nowIso,
+  isTransientNetworkError,
+  unwrap,
+  toCamelList,
+} from '@/lib/supabase'
 import {notifyUser} from '@/lib/notifications/dispatch'
 import type {NotificationPriority} from '@/lib/notifications/events'
 import {toIpString} from './request-meta'
@@ -21,6 +29,20 @@ import {toIpString} from './request-meta'
  */
 
 export type ActorKind = 'user' | 'advisor' | 'admin' | 'system'
+
+/** Snake_case row shape of `audit.logs` (matches sql/001_schema.sql). */
+export interface AuditLogRow {
+  id: string
+  actor_id: string | null
+  actor_type: ActorKind
+  action: string
+  entity: string | null
+  entity_id: string | null
+  detail: Record<string, unknown> | null
+  ip: string | null
+  user_agent: string | null
+  created_at: string
+}
 
 export async function audit(params: {
   actorId?: string | null
@@ -45,8 +67,13 @@ export async function audit(params: {
       user_agent: params.userAgent ?? null,
       created_at: nowIso(),
     })
-  } catch {
-    // audit must never break the primary flow
+  } catch (err) {
+    // audit must never break the primary flow — but surface transient
+    // upstream failures so operators can see the pipe is down.
+    if (isTransientNetworkError(err)) {
+      // eslint-disable-next-line no-console
+      console.warn('[audit] transient write failure (audit row dropped):', (err as Error).message)
+    }
   }
 }
 
@@ -67,8 +94,12 @@ export async function securityEvent(params: {
       detail: params.detail ? JSON.stringify(params.detail) : null,
       created_at: nowIso(),
     })
-  } catch {
+  } catch (err) {
     // security-event capture must never break the primary flow
+    if (isTransientNetworkError(err)) {
+      // eslint-disable-next-line no-console
+      console.warn('[audit] transient write failure (security event dropped):', (err as Error).message)
+    }
   }
 }
 
@@ -99,6 +130,24 @@ export async function notify(params: NotifyParams): Promise<void> {
     emailVars: params.emailVars,
     dedupeKey: params.dedupeKey,
   })
+}
+
+/**
+ * Audit trail for an investor — every action they performed (actor_id) AND
+ * every action taken against their profile record (entity='profile' AND
+ * entity_id=userId). Newest first.
+ *
+ * Note the PostgREST filter syntax: a nested group MUST be introduced by an
+ * explicit logical operator (`and(...)` / `or(...)` / `not.and(...)`). A bare
+ * `(a.eq.x,b.eq.y)` group is rejected with PGRST100 — that was the bug.
+ */
+export async function investorTrail(userId: string, limit = 100) {
+  const res = await auditTable()
+    .select('*')
+    .or(`actor_id.eq."${userId}",(entity.eq."profile" and entity_id.eq."${userId}")`)
+    .order('created_at', {ascending: false})
+    .limit(limit)
+  return toCamelList(unwrap<AuditLogRow[]>(res, 'audit.investorTrail'))
 }
 
 /** Generate a human-readable reference, e.g. MVR-ORD-4K7Q2A. */

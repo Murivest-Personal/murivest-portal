@@ -275,7 +275,7 @@ export async function investorDetail(actx: AdminContext, userId: string) {
     unwrap<AuditLogRow[]>(
       await auditTable()
         .select('*')
-        .or(`actor_id.eq."${userId}",(entity.eq."profile",entity_id.eq."${profile.id}")`)
+        .or(`actor_id.eq."${userId}",(entity.eq."profile" and entity_id.eq."${profile.id}")`)
         .order('created_at', {ascending: false})
         .limit(40),
       'audit.investorTrail',
@@ -788,6 +788,9 @@ export async function documentsWorkspace() {
   const sanityDocs = client
     ? await client.fetch(`*[_type == "document" && defined(published) && published == true] | order(title asc) {_id, title, docType, accessTier, downloadable, publishDate, "fileExtension": file.asset->extension}`).catch(() => [])
     : []
+  const briefDocs = client
+    ? await client.fetch(`*[_type == "brief" && defined(digitalDocument)] | order(title asc) {_id, title, "docType": "report", accessTier, "downloadable": true, "publishDate": _updatedAt, "fileExtension": digitalDocument->extension}`).catch(() => [])
+    : []
 
   return {
     grants: grantRows.map((g) => ({
@@ -819,7 +822,7 @@ export async function documentsWorkspace() {
       tags: m.tags,
       notes: m.notes,
     })),
-    sanityDocs,
+    sanityDocs: [...sanityDocs, ...briefDocs],
     sanityConfigured: !!client,
   }
 }

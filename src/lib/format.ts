@@ -4,15 +4,33 @@ export function fmtMoney(value: number | null | undefined, currency = 'USD', opt
   if (value == null || Number.isNaN(value)) return '—'
   const zero = new Set(['USD', 'EUR', 'GBP']).has(currency) ? 0 : 0
   try {
+    if (opts?.compact) return fmtCompactMoney(value, currency)
     return new Intl.NumberFormat('en-GB', {
       style: 'currency',
       currency,
-      maximumFractionDigits: opts?.compact ? 1 : zero,
-      notation: opts?.compact ? 'compact' : 'standard',
+      maximumFractionDigits: zero,
+      notation: 'standard',
     }).format(value)
   } catch {
     return `${currency} ${value.toLocaleString('en-GB')}`
   }
+}
+
+/** Deterministic compact money (server/client identical). Avoids Intl compact notation, which differs across ICU builds. */
+function fmtCompactMoney(value: number, currency: string): string {
+  const abs = Math.abs(value)
+  let scaled = abs
+  let suffix = ''
+  if (abs >= 1e12) { scaled = abs / 1e12; suffix = 'T' }
+  else if (abs >= 1e9) { scaled = abs / 1e9; suffix = 'B' }
+  else if (abs >= 1e6) { scaled = abs / 1e6; suffix = 'M' }
+  else if (abs >= 1e3) { scaled = abs / 1e3; suffix = 'K' }
+  const scaledStr = new Intl.NumberFormat('en-GB', {
+    maximumFractionDigits: 1,
+    minimumFractionDigits: 0,
+  }).format(scaled)
+  const sign = value < 0 ? '-' : ''
+  return `${sign}${currency} ${scaledStr}${suffix}`
 }
 
 export function fmtNumber(value: number | null | undefined, digits = 0): string {

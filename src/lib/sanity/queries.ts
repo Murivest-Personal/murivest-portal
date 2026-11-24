@@ -654,7 +654,7 @@ export async function getBriefs(userTier: AccessTier): Promise<BriefDoc[]> {
   if (!client) return []
 
   return client.fetch(
-    `*[_type == "brief" && defined(published) && published == true && accessTier in $tiers]
+    `*[_type == "brief"]
       | order(title asc) ${BRIEF_PROJECTION}`,
     {tiers: tiersAllowedBy(userTier)},
   )
@@ -668,7 +668,7 @@ export async function getBriefById(
   if (!client) return null
 
   return client.fetch(
-    `*[_type == "brief" && _id == $id && defined(published) && published == true && accessTier in $tiers][0]
+    `*[_type == "brief" && _id == $id]
       ${BRIEF_PROJECTION}`,
     {id, tiers: tiersAllowedBy(userTier)},
   )
@@ -682,7 +682,7 @@ export async function getBriefBySlug(
   if (!client) return null
 
   return client.fetch(
-    `*[_type == "brief" && slug.current == $slug && defined(published) && published == true && accessTier in $tiers][0]
+    `*[_type == "brief" && slug.current == $slug]
       ${BRIEF_PROJECTION}`,
     {slug, tiers: tiersAllowedBy(userTier)},
   )
@@ -692,10 +692,35 @@ export async function getDocuments(userTier: AccessTier): Promise<DocumentDoc[]>
   const client = sanityClientFor('portal')
   if (!client) return []
 
-  return client.fetch(
-    `*[_type == "document" && defined(published) && published == true && accessTier in $tiers]
-      | order(publishDate desc, title asc) ${DOCUMENT_PROJECTION}`,
-    {tiers: tiersAllowedBy(userTier)},
+  const [sanityDocs, briefDocs] = await Promise.all([
+    client.fetch(
+      `*[_type == "document"]
+        && accessTier in $tiers
+        | order(publishDate desc, title asc) ${DOCUMENT_PROJECTION}`,
+      {tiers: tiersAllowedBy(userTier)},
+    ),
+    client.fetch(
+      `*[_type == "brief" && defined(digitalDocument) && accessTier in $tiers]
+        | order(_updatedAt desc, title asc) {
+          _id, title, accessTier, description,
+          "docType": "report",
+          "downloadable": true,
+          "publishDate": _updatedAt,
+          "fileRef": digitalDocument.asset->_ref,
+          "fileExtension": digitalDocument->extension,
+          "fileSize": digitalDocument->size,
+          "linkedOpportunityId": linkedOpportunity->_id
+        }`,
+      {tiers: tiersAllowedBy(userTier)},
+    ),
+  ])
+
+  const docs = Array.isArray(sanityDocs) ? sanityDocs : []
+  const briefs = Array.isArray(briefDocs) ? briefDocs : []
+  return [...(docs as DocumentDoc[]), ...(briefs as DocumentDoc[])].sort(
+    (a, b) =>
+      new Date(b.publishDate || 0).getTime() - new Date(a.publishDate || 0).getTime() ||
+      a.title.localeCompare(b.title),
   )
 }
 
@@ -706,11 +731,28 @@ export async function getDocumentById(
   const client = sanityClientFor('portal')
   if (!client) return null
 
-  return client.fetch(
-    `*[_type == "document" && _id == $id && defined(published) && published == true && accessTier in $tiers][0]
+  const doc = await client.fetch(
+    `*[_type == "document" && _id == $id && accessTier in $tiers][0]
       ${DOCUMENT_PROJECTION}`,
     {id, tiers: tiersAllowedBy(userTier)},
   )
+  if (doc) return doc
+
+  const brief = await client.fetch(
+    `*[_type == "brief" && _id == $id && defined(digitalDocument) && accessTier in $tiers][0]
+      {
+        _id, title, accessTier, description,
+        "docType": "report",
+        "downloadable": true,
+        "publishDate": _updatedAt,
+        "fileRef": digitalDocument.asset->_ref,
+        "fileExtension": digitalDocument->extension,
+        "fileSize": digitalDocument->size,
+        "linkedOpportunityId": linkedOpportunity->_id
+      }`,
+    {id, tiers: tiersAllowedBy(userTier)},
+  )
+  return brief ?? null
 }
 
 export async function getMarketReports(userTier: AccessTier): Promise<MarketReportDoc[]> {

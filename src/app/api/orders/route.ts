@@ -63,6 +63,14 @@ export async function POST(req: NextRequest) {
   const payable = o.amountKes > 0 || o.amountUsd > 0
   const status = payable ? 'awaiting_payment' : 'processing'
 
+  // Wells Fargo international courier delivery cost for hard-copy briefs
+  // shipped outside Kenya. Configurable via NEXT_PUBLIC_WELLS_FARGO_INTERNATIONAL_DELIVERY_USD.
+  const internationalDeliveryCost = o.format === 'hard_copy' && o.shippingAddress && !/Kenya|Nairobi|Mombasa|Kisumu|Nakuru|Eldoret|Kiambu|Kajiado|Machakos|Thika/i.test(o.shippingAddress)
+    ? Number(process.env.NEXT_PUBLIC_WELLS_FARGO_INTERNATIONAL_DELIVERY_USD ?? 45)
+    : 0
+
+  const amountUsdTotal = o.amountUsd + internationalDeliveryCost
+
   let organisation: string | null = null
   if (ctx.profile?.organisationId) {
     const orgRow = unwrapNullable<OrganisationRow>(
@@ -88,7 +96,7 @@ export async function POST(req: NextRequest) {
           format: o.format,
           customScope: o.customScope ?? null,
           amountKes: o.amountKes,
-          amountUsd: o.amountUsd,
+          amountUsd: amountUsdTotal,
           currency: o.currency,
           status,
           paymentMethod: o.paymentMethod ?? null,
@@ -98,6 +106,7 @@ export async function POST(req: NextRequest) {
           shippingAddress: o.shippingAddress ?? null,
           phone: o.phone ?? ctx.profile?.phone ?? null,
           deliveryMethod: o.format === 'hard_copy' ? 'courier' : 'secure_download',
+          deliveryCostUsd: internationalDeliveryCost,
           createdAt: nowIso(),
           updatedAt: nowIso(),
         }),
@@ -123,7 +132,7 @@ export async function POST(req: NextRequest) {
       orderRef: order.reference,
       orderScope: order.briefType === 'custom' && order.customScope ? ` — scope: ${order.customScope.slice(0, 120)}` : '',
       amountLine: payable
-        ? `Amount due: ${order.currency} ${(order.currency === 'KES' ? order.amountKes : order.amountUsd).toLocaleString('en-GB')}.`
+        ? `Amount due: ${order.currency} ${(order.currency === 'KES' ? order.amountKes : order.amountUsd).toLocaleString('en-GB')}.${internationalDeliveryCost > 0 ? ` Includes Wells Fargo international delivery: $${internationalDeliveryCost.toLocaleString()}.` : ''}`
         : 'No payment is required for this request.',
     },
   })

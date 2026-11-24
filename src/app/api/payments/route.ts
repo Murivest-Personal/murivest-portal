@@ -1,6 +1,6 @@
 import {NextResponse, type NextRequest} from 'next/server'
 import {supabase, unwrap, unwrapNullable, toCamel, nowIso, newId} from '@/lib/supabase'
-import {mpesaConfirmationSchema, wireConfirmationSchema} from '@/lib/validation'
+import {mpesaConfirmationSchema, paypalConfirmationSchema, wireConfirmationSchema} from '@/lib/validation'
 import {audit, notify} from '@/lib/auth/audit'
 import {requireApiUser, isResponse} from '@/lib/auth/context'
 import {parseBody, fail, clientMeta} from '@/lib/api'
@@ -137,7 +137,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         {
           ok: false,
-          error: 'Card processing is not yet enabled on this environment. M-Pesa and bank wire are available; card payments are activated by Murivest on request.',
+          error: 'Card processing is not yet enabled on this environment. M-Pesa, bank wire and PayPal are available; card payments are activated by Murivest on request.',
         },
         {status: 501},
       )
@@ -145,6 +145,55 @@ export async function POST(req: NextRequest) {
     // Gateway integration point — provider adapter lives in
     // src/lib/payments/card-gateway.ts when Murivest supplies credentials.
     return NextResponse.json({ok: false, error: 'Card gateway adapter not installed.'}, {status: 501})
+  }
+
+  if (method === 'paypal') {
+    const parsed = paypalConfirmationSchema.safeParse(body)
+    if (!parsed.success) return fail('Invalid PayPal submission.')
+    const orderRow = unwrapNullable<OrderRow>(
+      await supabase
+        .from('orders')
+        .select('*')
+        .eq('id', parsed.data.orderId)
+        .eq('user_id', ctx.user.id)
+        .maybeSingle(),
+      'payments.orderForPaypal',
+    )
+    if (!orderRow) return fail('Order not found.', 404)
+    const order = toCamel(orderRow)
+    if (order.status === 'cancelled') return fail('This order was cancelled.', 409)
+
+    unwrap<null>(
+      await supabase.from('payments').insert({
+        id: newId(),
+        order_id: order.id,
+        user_id: ctx.user.id,
+        method: 'paypal',
+        amount_kes: order.amountKes,
+        amount_usd: order.amountUsd,
+        currency: order.currency,
+        reference: parsed.data.paypalEmail ?? 'paypal_external',
+        status: 'submitted',
+        created_at: nowIso(),
+      }),
+      'payments.createPaypal',
+    )
+    unwrap<null>(
+      await supabase
+        .from('orders')
+        .update({status: 'payment_confirmed', payment_method: 'paypal', transaction_id: 'paypal_external'})
+        .eq('id', order.id),
+      'payments.confirmPaypal',
+    )
+    await notify({
+      userId: ctx.user.id,
+      type: 'order_status',
+      title: 'PayPal payment received',
+      body: `Your PayPal payment for ${order.reference} has been submitted. Preparation begins once finance confirms.`,
+      link: '/portal/orders',
+    })
+    await audit({actorId: ctx.user.id, action: 'payment.submitted', entity: 'order', entityId: order.id, detail: {method: 'paypal'}, ...meta})
+    return NextResponse.json({ok: true})
   }
 
   return fail('Unknown payment method.')

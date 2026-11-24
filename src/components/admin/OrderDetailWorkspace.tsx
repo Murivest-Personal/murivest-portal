@@ -145,7 +145,7 @@ export default function OrderDetailWorkspace({data}: {data: OrderDetailData}) {
                   key={s}
                   type="button"
                   disabled={busy}
-                  onClick={() => run('order.status', {orderId: order.id, status: s}, `Status advanced to ${s.replace(/_/g, ' ')}.`)}
+                  onClick={() => run('order.status', {orderId: order.id, status: s, ...(s === 'delivered' ? {deliveryDocumentId} : {})}, `Status advanced to ${s.replace(/_/g, ' ')}.`)}
                   className={
                     s === 'cancelled'
                       ? 'border border-destructive/40 px-3 py-1.5 text-[10px] font-medium uppercase tracking-[0.12em] text-destructive hover:bg-destructive/10 disabled:opacity-60'

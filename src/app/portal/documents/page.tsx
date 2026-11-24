@@ -1,8 +1,8 @@
 import type {Metadata} from 'next'
 import {supabase, unwrap, toCamelList} from '@/lib/supabase'
-import type {DocumentRequestRow} from '@/lib/db-types'
+import type {DocumentGrantRow, DocumentRequestRow} from '@/lib/db-types'
 import {requirePortalUser} from '@/lib/auth/context'
-import {getDocuments} from '@/lib/sanity/queries'
+import {getDocumentById, getDocuments} from '@/lib/sanity/queries'
 import {isSanityConfigured} from '@/lib/sanity/client'
 import DocumentsWorkspace from '@/components/portal/documents/DocumentsWorkspace'
 
@@ -21,8 +21,9 @@ export default async function DocumentsPage({
   const ctx = await requirePortalUser()
   const sp = await searchParams
   const openNda = sp.nda === '1'
+  const orgId = ctx.profile?.organisationId ?? null
 
-  const [documents, requests] = await Promise.all([
+  const [documentsResult, requestsResult, grantRowsResult] = await Promise.all([
     getDocuments(ctx.effectiveTier),
     supabase
       .from('document_requests')
@@ -31,7 +32,36 @@ export default async function DocumentsPage({
       .order('created_at', {ascending: false})
       .limit(20)
       .then((res) => toCamelList(unwrap<DocumentRequestRow[]>(res, 'documentRequests.list'))),
+    (async () => {
+      let q = supabase.from('document_grants').select('*')
+      if (orgId) {
+        q = q.or(`user_id.eq.${ctx.user.id},organisation_id.eq.${orgId}`)
+      } else {
+        q = q.eq('user_id', ctx.user.id)
+      }
+      return toCamelList(unwrap<DocumentGrantRow[]>(await q, 'documentGrants.byUser'))
+    })(),
   ])
+
+  const documents = Array.isArray(documentsResult) ? documentsResult : []
+  const requests = Array.isArray(requestsResult) ? requestsResult : []
+  const grantRows = Array.isArray(grantRowsResult) ? grantRowsResult : []
+
+  const byId = new Map(documents.map((d) => [d._id, d]))
+  const grantedDocs = await Promise.all(
+    grantRows
+      .filter((g) => g.sanityDocumentId && !byId.has(g.sanityDocumentId))
+      .map((g) => getDocumentById(g.sanityDocumentId, 'tier_3')),
+  )
+  for (const doc of grantedDocs) {
+    if (doc) byId.set(doc._id, doc)
+  }
+
+  const merged = [...byId.values()].sort(
+    (a, b) =>
+      new Date(b.publishDate || 0).getTime() - new Date(a.publishDate || 0).getTime() ||
+      a.title.localeCompare(b.title),
+  )
 
   return (
     <div>
@@ -43,7 +73,7 @@ export default async function DocumentsPage({
         </p>
       </div>
       <DocumentsWorkspace
-        documents={documents.map((d) => ({
+        documents={merged.map((d) => ({
           id: d._id,
           title: d.title,
           docType: d.docType,

@@ -48,7 +48,34 @@ const strOrNull = (p: Record<string, unknown>, k: string) => (k in p ? (typeof p
 const bool = (p: Record<string, unknown>, k: string) => (typeof p[k] === 'boolean' ? (p[k] as boolean) : undefined)
 const int = (p: Record<string, unknown>, k: string) => (typeof p[k] === 'number' && Number.isFinite(p[k]) ? Math.trunc(p[k] as number) : undefined)
 
-export async function POST(req: NextRequest) {
+/** Classify transient upstream failures (Supabase TLS reset, DNS blip, socket close). */
+function isTransientNetworkError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false
+  const m = err.message.toLowerCase()
+  return (
+    m.includes('fetch failed') ||
+    m.includes('econnreset') ||
+    m.includes('etimedout') ||
+    m.includes('econnrefused') ||
+    m.includes('socket disconnected') ||
+    m.includes('network')
+  )
+}
+
+/** 503 + Retry-After for transient failures; re-throw anything else. */
+function transientFallback(err: unknown): NextResponse {
+  if (isTransientNetworkError(err)) {
+    // eslint-disable-next-line no-console
+    console.warn('[api/admin/action] transient upstream failure:', (err as Error).message)
+    return NextResponse.json(
+      {ok: false, error: 'Admin service is temporarily unavailable. Please retry.'},
+      {status: 503, headers: {'Retry-After': '5'}},
+    )
+  }
+  throw err
+}
+
+async function handlePost(req: NextRequest): Promise<NextResponse> {
   const parsed = schema.safeParse(await req.json().catch(() => null))
   if (!parsed.success) return fail('Invalid request.')
   const {action} = parsed.data
@@ -1064,4 +1091,12 @@ export async function POST(req: NextRequest) {
   }
 
   return fail('Unknown action.')
+}
+
+export async function POST(req: NextRequest) {
+  try {
+    return await handlePost(req)
+  } catch (err) {
+    return transientFallback(err)
+  }
 }

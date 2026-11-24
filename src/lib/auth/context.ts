@@ -2,7 +2,7 @@ import {cache} from 'react'
 import {cookies} from 'next/headers'
 import {redirect} from 'next/navigation'
 import {NextResponse} from 'next/server'
-import {supabase, unwrapNullable, toCamel} from '@/lib/supabase'
+import {supabase, unwrapNullable, toCamel, isTransientNetworkError} from '@/lib/supabase'
 import {SESSION_COOKIE, hashToken} from './session'
 import type {AccessTier} from '@/lib/sanity/types'
 import type {InvestorProfile, InvestorProfileRow, Session, SessionRow, User, UserRow} from '@/lib/db-types'
@@ -21,6 +21,11 @@ export interface AuthContext {
 /**
  * Resolve the signed-in investor from the opaque session cookie.
  * Cached per request; returns null for anonymous visitors.
+ *
+ * Throws `SupabaseUnavailableError` (from `@/lib/supabase`) when the
+ * upstream database is transiently unreachable. `requireApiUser` catches it
+ * and turns it into a 503; `requirePortalUser` lets it propagate so the
+ * error boundary shows rather than silently logging the user out.
  */
 export const getAuthContext = cache(async (): Promise<AuthContext | null> => {
   const jar = await cookies()
@@ -85,16 +90,39 @@ export function effectiveTierFor(profile: InvestorProfile | null, isAdmin = fals
   return assigned
 }
 
-/** Server-component guard: portal pages redirect anonymous users to the landing page. */
+/**
+ * Server-component guard: portal pages redirect anonymous users to the
+ * landing page. Transient DB failures are NOT swallowed — they propagate so
+ * the nearest error boundary shows "temporarily unavailable" instead of
+ * misleading the user with a login redirect (which would look like a
+ * silent logout).
+ */
 export async function requirePortalUser(): Promise<AuthContext> {
   const ctx = await getAuthContext()
   if (!ctx) redirect('/?auth=required')
   return ctx
 }
 
-/** API guard: returns context or a 401 JSON response. */
+/**
+ * API guard: returns context, a 401 JSON response (anonymous), or a 503
+ * JSON response (transient DB outage). Never throws for the transient case —
+ * every route gets clean 503 + Retry-After semantics for free.
+ */
 export async function requireApiUser(): Promise<{ctx: AuthContext} | {response: NextResponse}> {
-  const ctx = await getAuthContext()
+  let ctx: AuthContext | null
+  try {
+    ctx = await getAuthContext()
+  } catch (err) {
+    if (isTransientNetworkError(err)) {
+      return {
+        response: NextResponse.json(
+          {ok: false, error: 'Authentication service is temporarily unavailable. Please retry.'},
+          {status: 503, headers: {'Retry-After': '5'}},
+        ),
+      }
+    }
+    throw err
+  }
   if (!ctx) {
     return {response: NextResponse.json({error: 'Authentication required.'}, {status: 401})}
   }

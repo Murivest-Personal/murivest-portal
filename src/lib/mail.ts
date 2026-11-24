@@ -1,6 +1,4 @@
 import nodemailer, {type Transporter} from 'nodemailer'
-import {COMPANY} from '@/lib/constants'
-
 /**
  * Transactional email delivery — over Murivest's own SMTP server.
  *
@@ -10,6 +8,8 @@ import {COMPANY} from '@/lib/constants'
  *   SMTP_SECURE 'true' | 'false' | leave unset to auto-detect from the port
  *   SMTP_USER   mailbox username
  *   SMTP_PASS   mailbox password / app password
+ *   SENDER_NAME sender display name, e.g. "Murivest Group Ltd" (defaults to
+ *              "Murivest Group Ltd") — used when SMTP_FROM is not set
  *   MAIL_FROM   visible From header, e.g. "Murivest <no-reply@murivest.com>"
  *
  * No third-party API (Resend or otherwise) is used. Credentials are only
@@ -29,7 +29,7 @@ export interface MailMessage {
   html?: string
 }
 
-const FROM = process.env.SMTP_FROM || COMPANY.name
+const FROM = process.env.SMTP_FROM || `${process.env.SENDER_NAME || 'Murivest Group Ltd'} <${process.env.SMTP_USER || 'no-reply@murivest.com'}>`
 
 function smtpConfigured(): boolean {
   return Boolean(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS)

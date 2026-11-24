@@ -284,18 +284,19 @@ export default function DocumentsWorkspace({
                         </div>
                         <div className="flex flex-shrink-0 items-center gap-2">
                           {downloadableCount > 0 ? (
-                            <motion.button
-                              type="button"
+                            <motion.span
+                              role="button"
+                              tabIndex={0}
                               whileTap={{scale: 0.98}}
                               transition={SPRING}
                               onClick={(e) => {
                                 e.stopPropagation()
                                 downloadAll(g.docs)
                               }}
-                              className="rounded-pill inline-flex items-center gap-1.5 bg-primary px-4 py-2 text-[10px] font-medium uppercase tracking-[0.12em] text-primary-foreground transition-colors hover:bg-primary/90"
+                              className="rounded-pill inline-flex cursor-pointer items-center gap-1.5 bg-primary px-4 py-2 text-[10px] font-medium uppercase tracking-[0.12em] text-primary-foreground transition-colors hover:bg-primary/90"
                             >
                               <FileDown className="h-3.5 w-3.5" /> Download all
-                            </motion.button>
+                            </motion.span>
                           ) : null}
                           <span className="flex h-8 w-8 items-center justify-center text-muted-foreground">
                             <motion.span animate={{rotate: isCollapsed ? 0 : 180}} transition={SPRING} className="flex">

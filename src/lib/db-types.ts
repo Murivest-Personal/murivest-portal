@@ -247,6 +247,7 @@ export interface OrderRow {
   shipping_address: string
   phone: string
   delivery_method: string
+  delivery_cost_usd?: number
   tracking_number: string
   cancelled_at: string
   cancellation_reason: string

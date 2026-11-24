@@ -1,10 +1,10 @@
 import {NextResponse, type NextRequest} from 'next/server'
-import {supabase, unwrap, toCamelList, nowIso, newId} from '@/lib/supabase'
+import {supabase, unwrap, unwrapNullable, toCamelList, nowIso, newId} from '@/lib/supabase'
 import {getDocumentById, getFileAssetUrl} from '@/lib/sanity/queries'
 import {audit} from '@/lib/auth/audit'
 import {requireApiUser, isResponse} from '@/lib/auth/context'
 import {toIpString, userAgentOf} from '@/lib/auth/request-meta'
-import type {DocumentGrantRow} from '@/lib/db-types'
+import type {DocumentGrantRow, OrderRow} from '@/lib/db-types'
 
 type Params = {params: Promise<{id: string}>}
 
@@ -49,7 +49,20 @@ export async function GET(req: NextRequest, {params}: Params) {
         (g.organisationId && g.organisationId === orgId && (!g.expiresAt || new Date(g.expiresAt) > new Date())),
     )
     if (!allowed) {
-      return NextResponse.json({error: 'This document requires a specific grant from your advisor.'}, {status: 403})
+      // Fallback: an order delivered this document to the investor — grant
+      // access even if no explicit document_grant row matches.
+      const deliveredOrder = unwrapNullable<OrderRow>(
+        await supabase
+          .from('orders')
+          .select('*')
+          .eq('user_id', ctx.user.id)
+          .eq('delivery_document_id', id)
+          .maybeSingle(),
+        'orders.byDeliveryDoc',
+      )
+      if (!deliveredOrder) {
+        return NextResponse.json({error: 'This document requires a specific grant from your advisor.'}, {status: 403})
+      }
     }
   }
 

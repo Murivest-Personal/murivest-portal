@@ -346,7 +346,7 @@ export default async function PortalOverviewPage() {
             {scored.map(({o, match}) => (
               <OpportunityCard
                 key={o._id}
-                opportunity={o}
+                opportunity={{...o, isOffMarket: o.isOffMarket ?? undefined}}
                 saved={false}
                 matchedTags={match.reasons.slice(0, 2)}
                 viewCount={viewCounts.get(o._id)}

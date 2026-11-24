@@ -62,7 +62,7 @@ export default async function BriefDetailPage({
     <div>
       <div className="mb-6">
         <Link
-          href="/briefs"
+          href="/property-briefs"
           className="inline-flex items-center gap-1.5 text-[10px] uppercase tracking-[0.14em] text-muted-foreground transition-colors hover:text-primary"
         >
           <ArrowLeft className="h-3.5 w-3.5" />
@@ -225,7 +225,7 @@ export default async function BriefDetailPage({
 
             <div className="mt-6 border-t border-border pt-4">
               <Link
-                href="/briefs"
+                href="/property-briefs"
                 className="inline-flex items-center gap-1.5 text-[10px] uppercase tracking-[0.14em] text-muted-foreground transition-colors hover:text-primary"
               >
                 <BookOpen className="h-3.5 w-3.5" />

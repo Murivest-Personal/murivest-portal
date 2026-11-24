@@ -46,6 +46,7 @@ export interface OrderRow {
   createdAt: string
   deliveredAt: string | null
   customScope: string | null
+  deliveryCostUsd?: number
 }
 
 interface Props {
@@ -62,7 +63,7 @@ export default function OrdersWorkspace({briefs, orders, sanityConfigured, prese
   const [format, setFormat] = useState<'digital' | 'hard_copy'>('digital')
   const [address, setAddress] = useState('')
   const [phone, setPhone] = useState('')
-  const [paymentMethod, setPaymentMethod] = useState<'mpesa' | 'wire' | 'card'>('mpesa')
+  const [paymentMethod, setPaymentMethod] = useState<'mpesa' | 'wire' | 'card' | 'paypal'>('mpesa')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [placedOrder, setPlacedOrder] = useState<OrderRow | null>(null)
@@ -145,7 +146,7 @@ export default function OrdersWorkspace({briefs, orders, sanityConfigured, prese
       setPlacedOrder(data.order)
       setOrdering(null)
       if (payable) setPayModal(data.order)
-      router.refresh()
+      else router.refresh()
     } catch {
       setError('Network error — please try again.')
     } finally {
@@ -162,7 +163,9 @@ export default function OrdersWorkspace({briefs, orders, sanityConfigured, prese
       const body =
         payModal.paymentMethod === 'mpesa'
           ? {method: 'mpesa', orderId: payModal.id, mpesaMessage}
-          : {method: 'wire', orderId: payModal.id, bankReference: wireRef}
+          : payModal.paymentMethod === 'wire'
+            ? {method: 'wire', orderId: payModal.id, bankReference: wireRef}
+            : {method: 'paypal', orderId: payModal.id, paypalEmail: wireRef}
       const res = await fetch('/api/payments', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -446,6 +449,7 @@ export default function OrdersWorkspace({briefs, orders, sanityConfigured, prese
                         <div className="eyebrow mb-0.5">Amount</div>
                         <div className="tabular font-display text-xl text-primary">
                           {payable ? (order.amountKes > 0 ? `KES ${order.amountKes.toLocaleString()}` : `$${order.amountUsd.toLocaleString()}`) : 'Complimentary'}
+                          {order.deliveryCostUsd ? <div className="mt-1 text-[10px] text-muted-foreground">Includes Wells Fargo international delivery: $${order.deliveryCostUsd.toLocaleString()} USD</div> : null}
                         </div>
                       </div>
                       <div className="flex flex-wrap gap-2 lg:justify-end">
@@ -564,6 +568,12 @@ export default function OrdersWorkspace({briefs, orders, sanityConfigured, prese
                   <span className={label}>Contact telephone</span>
                   <input className={input} value={phone} onChange={(e) => setPhone(e.target.value)} maxLength={40} placeholder="+254 … / +44 …" />
                 </label>
+                {/Kenya|Nairobi|Mombasa|Kisumu|Nakuru|Eldoret|Kiambu|Kajiado|Machakos|Thika/i.test(address) ? (
+                  <div className="border-l-2 border-gold bg-gold/5 px-4 py-3 text-xs leading-relaxed text-primary">
+                    <span className="font-semibold uppercase tracking-[0.12em]">Wells Fargo international delivery</span>
+                    <div className="mt-1">{`Courier delivery outside Kenya — $${Number(process.env.NEXT_PUBLIC_WELLS_FARGO_INTERNATIONAL_DELIVERY_USD ?? 45).toLocaleString()} USD added to your order total.`}</div>
+                  </div>
+                ) : null}
               </div>
             ) : null}
 
@@ -576,6 +586,7 @@ export default function OrdersWorkspace({briefs, orders, sanityConfigured, prese
                       ['mpesa', Smartphone, 'M-Pesa'],
                       ['wire', Building2, 'Bank wire'],
                       ['card', CreditCard, 'Card'],
+                      ['paypal', ArrowRight, 'PayPal'],
                     ] as const
                   ).map(([m, Icon, lbl]) => (
                     <button
@@ -679,6 +690,60 @@ export default function OrdersWorkspace({briefs, orders, sanityConfigured, prese
                 </button>
                 <p className="text-center text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Finance verifies every payment before preparation begins</p>
               </form>
+            ) : payModal.paymentMethod === 'paypal' ? (
+              <div className="modal-scroll portal-scroll flex-1 space-y-5 p-5 sm:p-6 text-center">
+                <div className="bg-secondary p-4 text-xs leading-relaxed text-muted-foreground">
+                  <div className="eyebrow mb-2">PayPal</div>
+                  <div className="mb-3">Pay securely with PayPal using your existing PayPal account or a debit/credit card. You will be redirected to PayPal to complete the payment.</div>
+                  <a
+                    href="https://www.paypal.com/ncp/payment/SZDLXSVQSB554"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center justify-center gap-2 bg-primary px-8 py-3.5 text-xs font-semibold uppercase tracking-[0.16em] text-primary-foreground transition-colors hover:bg-forest-deep"
+                  >
+                    <ArrowRight className="h-4 w-4" /> Pay with PayPal
+                  </a>
+                  <p className="mt-3 text-[10px] uppercase tracking-[0.14em] text-muted-foreground">After paying, mark the order below so finance can verify your payment.</p>
+                </div>
+                <label className="block">
+                  <span className={label}>PayPal email (optional — for reconciliation)</span>
+                  <input className={input} value={wireRef} onChange={(e) => setWireRef(e.target.value)} maxLength={120} placeholder="your@email.com" />
+                </label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!payModal) return
+                    setPayBusy(true)
+                    setPayError('')
+                    fetch('/api/payments', {
+                      method: 'POST',
+                      headers: {'Content-Type': 'application/json'},
+                      body: JSON.stringify({method: 'paypal', orderId: payModal.id, paypalEmail: wireRef}),
+                    }).then(async (res) => {
+                      const data = await res.json()
+                      if (!res.ok || data.error) {
+                        setPayError(data.error || 'PayPal submission failed.')
+                        setPayBusy(false)
+                        return
+                      }
+                      setPayNotice('PayPal payment recorded. Murivest finance will verify before preparation begins.')
+                      setWireRef('')
+                      setPayModal(null)
+                      router.refresh()
+                    }).catch(() => {
+                      setPayError('Network error — please try again.')
+                      setPayBusy(false)
+                    })
+                  }}
+                  disabled={payBusy}
+                  className="inline-flex w-full items-center justify-center gap-2 bg-primary px-6 py-3.5 text-xs font-semibold uppercase tracking-[0.16em] text-primary-foreground transition-colors hover:bg-forest-deep disabled:opacity-60"
+                >
+                  {payBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
+                  Record PayPal payment
+                </button>
+                {payError ? <div className="border-l-2 border-destructive bg-red-50 px-4 py-3 text-xs text-destructive">{payError}</div> : null}
+                {payNotice ? <div className="border-l-2 border-gold bg-gold/5 px-4 py-3 text-xs leading-relaxed text-primary">{payNotice}</div> : null}
+              </div>
             ) : (
               <form onSubmit={submitPayment} className="modal-scroll portal-scroll flex-1 space-y-5 p-5 sm:p-6">
                 <div className="bg-secondary p-4 text-xs leading-relaxed text-muted-foreground">

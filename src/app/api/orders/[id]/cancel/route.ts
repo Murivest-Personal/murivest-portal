@@ -1,6 +1,6 @@
 import {NextResponse, type NextRequest} from 'next/server'
 import {z} from 'zod'
-import {supabase, unwrap, unwrapNullable, toCamel, nowIso} from '@/lib/supabase'
+import {supabase, unwrap, unwrapNullable, toCamel, nowIso, isTransientNetworkError} from '@/lib/supabase'
 import {audit, notify} from '@/lib/auth/audit'
 import {requireApiUser, isResponse} from '@/lib/auth/context'
 import {parseBody, fail, clientMeta} from '@/lib/api'
@@ -12,8 +12,7 @@ const cancelSchema = z.object({reason: z.string().trim().max(500).optional()})
 
 const CANCELLABLE = ['pending', 'awaiting_payment', 'payment_confirmed', 'processing']
 
-/** POST — cancel an order (only before fulfilment advances). */
-export async function POST(req: NextRequest, {params}: Params) {
+async function handlePost(req: NextRequest, {params}: Params): Promise<NextResponse> {
   const guard = await requireApiUser()
   if (isResponse(guard)) return guard.response
   const {id} = await params
@@ -50,4 +49,19 @@ export async function POST(req: NextRequest, {params}: Params) {
   })
   await audit({actorId: guard.ctx.user.id, action: 'order.cancelled', entity: 'order', entityId: id, detail: {reference: order.reference}, ...clientMeta(req)})
   return NextResponse.json({ok: true})
+}
+
+/** POST — cancel an order (only before fulfilment advances). */
+export async function POST(req: NextRequest, ctx: Params): Promise<NextResponse> {
+  try {
+    return await handlePost(req, ctx)
+  } catch (err) {
+    if (isTransientNetworkError(err)) {
+      return NextResponse.json(
+        {ok: false, error: 'Service temporarily unavailable. Please retry.'},
+        {status: 503, headers: {'Retry-After': '5'}},
+      )
+    }
+    throw err
+  }
 }

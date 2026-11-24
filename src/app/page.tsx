@@ -1,5 +1,6 @@
 import type {Metadata} from 'next'
 import Link from 'next/link'
+import Image from 'next/image'
 import {
   ArrowRight,
   BarChart3,
@@ -26,9 +27,9 @@ import {AuthModalProvider} from '@/components/marketing/AuthModalProvider'
 import {AuthTrigger} from '@/components/marketing/AuthTrigger'
 
 export const metadata: Metadata = {
-  title: 'Murivest Private Capital Portal — Direct Commercial Real Estate for UHNWIs & Family Offices',
+  title: 'Investor Suite by Murivest | Private Commercial Real Estate Investment Platform',
   description:
-    'The private capital allocation environment for ultra-high-net-worth individuals, family offices and institutional investors: off-market Grade A commercial real estate across Kenya, East Africa and the United Kingdom, institutional underwriting, capital-structure analysis and mandate-only execution under fiduciary standards.',
+    'Investor Suite is Murivest’s private digital environment for qualified investors, principals and family offices to review curated commercial real estate opportunities, investment analysis, mandates and confidential portfolio information.',
   keywords: [
     'private commercial real estate',
     'off-market commercial property',
@@ -43,7 +44,7 @@ export const metadata: Metadata = {
   ],
   alternates: {canonical: '/'},
   openGraph: {
-    title: 'Murivest Private Capital Portal — See the underwriting before you write the cheque',
+    title: 'Murivest Investor Suite — See the underwriting before you write the cheque',
     description:
       'Direct, non-pooled, mandate-only access to Grade A commercial real estate across East Africa and the UK — with institutional underwriting, stress tests and exit modelling on your side of the table.',
     type: 'website',
@@ -89,8 +90,8 @@ const FAQ_ITEMS = [
     a: 'No. Murivest Group Ltd does not pool capital and does not operate collective investment schemes. Every engagement proceeds on a direct, non-pooled, mandate-only basis under fiduciary standards and applicable KYC/AML requirements. You acquire, own and control the asset — with asset management available as a documented service.',
   },
   {
-    q: 'What does it cost to use the portal?',
-    a: 'Applying for access costs nothing and shares nothing beyond what verification lawfully requires. Investment briefs are priced per scope, displayed before you commit to payment, and delivered through a tracked fulfilment workflow. Engagement fees for mandates are documented and agreed in writing before any work begins — never percentage-of-capital surprises. Specific figures appear on each brief and each mandate proposal, because pricing detached from scope is exactly the practice this portal was built to end.',
+    q: 'What does it cost to use Investor Suite?',
+    a: 'Applying for access costs nothing and shares nothing beyond what verification lawfully requires. Investment briefs are priced per scope, displayed before you commit to payment, and delivered through a tracked fulfilment workflow. Engagement fees for mandates are documented and agreed in writing before any work begins — never percentage-of-capital surprises. Specific figures appear on each brief and each mandate proposal, because pricing detached from scope is exactly the practice Investor Suite was designed to make clear.',
   },
   {
     q: 'East Africa — how do I deal with the risk question?',
@@ -98,11 +99,11 @@ const FAQ_ITEMS = [
   },
   {
     q: 'How private is my information?',
-    a: 'The workspace is verification-gated and KYC/AML-checked. Data-room documents are watermarked, download-logged and served through expiring, non-guessable access. Sessions are device-recognised and individually revocable. Your details are never sold, never shared for marketing, and confidential material is never accessible on registration alone.',
+    a: 'Investor Suite is verification-gated and KYC/AML-checked. Data-room documents are watermarked, download-logged and served through expiring, non-guessable access. Sessions are device-recognised and individually revocable. Your details are never sold, never shared for marketing, and confidential material is never accessible on registration alone.',
   },
   {
     q: 'What if I request access and then decide not to proceed?',
-    a: 'Nothing happens. Your access simply lapses with inactivity, and no one chases you. Keep the investor manual, keep the Director\u2019s script, take whatever is useful. We would rather earn a mandate in a year than pressure a decision in a week — the portal is built for people who work exactly the same way.',
+    a: 'Nothing happens. Your access simply lapses with inactivity, and no one chases you. Keep the investor manual, keep the Director\u2019s script, take whatever is useful. We would rather earn a mandate in a year than pressure a decision in a week — Investor Suite is designed for people who prefer to make decisions without pressure.',
   },
 ]
 
@@ -148,16 +149,16 @@ const SIX_ANSWERS = [
   },
   {
     icon: Workflow,
-    question: 'Is everything tracked in one secure workspace?',
+    question: 'Is everything tracked in one private environment?',
     answer:
       'Mandates, documents, portfolio positions, advisor threads and every action in between — one auditable environment with watermarked data-room delivery and complete access logs.',
-    module: 'Workspace & Documents',
+    module: 'Investor Suite & Documents',
   },
   {
     icon: Lock,
     question: 'Will this stay private, high-signal and noise-free?',
     answer:
-      'Graduated access, NDA-gated confidential material, device-level session control — and no marketing churn. The portal was designed to be the quietest room your capital occupies.',
+      'Graduated access, NDA-gated confidential material, device-level session control — and no marketing churn. Investor Suite was designed to be the quietest room your capital occupies.',
     module: 'Account & Security',
   },
 ]
@@ -228,11 +229,11 @@ export default async function LandingPage() {
   const isAuthenticated = !!ctx
 
   const hero = {
-    eyebrow: landing?.heroEyebrow || 'Murivest Group · Private & Institutional Capital · Nairobi | London',
+    eyebrow: landing?.heroEyebrow || 'Murivest Group · Investor Suite · Nairobi | London',
     headline: landing?.heroHeadline || 'See the underwriting before you write the cheque.',
     subline:
       landing?.heroSubline ||
-      'The private workspace where ultra-high-net-worth individuals, family offices and institutional investors discover, underwrite, structure and execute commercial real estate — directly, discreetly, on a mandate-only basis, with the NOI, the stress cases and the exit maths on your side of the table.',
+      'A private investment environment for principals, family offices and qualified investors to discover, evaluate and pursue commercial real estate opportunities — with the NOI, downside scenarios and exit assumptions visible before a decision is made.',
   }
   const credibility = landing?.credibility?.length
     ? landing.credibility
@@ -281,7 +282,7 @@ export default async function LandingPage() {
                       href="/portal"
                       className="inline-flex items-center justify-center gap-2 border border-ivory/40 px-7 py-3.5 text-xs font-semibold uppercase tracking-[0.16em] text-ivory transition-colors hover:border-gold hover:text-gold"
                     >
-                      Enter workspace
+                      Enter Investor Suite
                     </Link>
                   ) : (
                     <AuthTrigger mode="signin" variant="outline">
@@ -310,7 +311,7 @@ export default async function LandingPage() {
                     'Institutional-quality underwriting, stress tests and downside scenarios, visible quickly.',
                     'Capital structure, leverage, hold and exit modelling with precision — saved across sessions.',
                     'Deep institutional briefs ordered and paid for in moments.',
-                    'Every interaction, document and decision tracked in one secure workspace.',
+                    'Every interaction, document and decision organised within one secure investor environment.',
                     'A private, high-signal environment — no noise, no cold pitch, no marketing churn.',
                   ].map((line) => (
                     <li key={line.slice(0, 24)} className="flex items-start gap-3 text-sm leading-relaxed text-ivory/75">
@@ -324,6 +325,103 @@ export default async function LandingPage() {
                   Murivest does not pool capital, operate collective investment schemes, or offer unlicensed financial products. Every engagement is mandate-only and subject to KYC/AML verification.
                 </p>
               </aside>
+            </div>
+          </section>
+
+          {/* ================= INVESTOR SUITE SHOWCASE ================= */}
+          <section id="investor-suite" className="overflow-hidden border-b border-border bg-[#F6F4EF]">
+            <div className="mx-auto max-w-6xl px-6 py-20 lg:px-10 lg:py-28">
+              <div className="grid items-end gap-8 lg:grid-cols-[1fr_0.7fr]">
+                <div>
+                  <div className="eyebrow mb-4">A private digital environment by Murivest</div>
+                  <h2 className="font-display max-w-3xl text-3xl leading-tight text-primary sm:text-4xl lg:text-5xl">
+                    Introducing <span className="italic text-gold">Investor Suite.</span>
+                  </h2>
+                </div>
+                <p className="max-w-xl text-sm leading-7 text-muted-foreground lg:justify-self-end">
+                  A dedicated environment for principals, family offices and qualified investors to review opportunities,
+                  examine investment analysis, manage written mandates and keep important client activity in one place.
+                </p>
+              </div>
+
+              <div className="mt-12 grid overflow-hidden border border-[#DED8CC] bg-[#EEECE6] lg:grid-cols-12">
+                <div className="flex flex-col justify-center p-8 sm:p-12 lg:col-span-5 lg:p-14">
+                  <div className="flex items-center gap-3">
+                    <span className="h-px w-8 bg-gold" />
+                    <span className="text-[9px] font-semibold uppercase tracking-[0.28em] text-gold">Inside Investor Suite</span>
+                  </div>
+                  <h3 className="mt-7 font-display text-3xl leading-tight text-primary sm:text-4xl">
+                    Your investment relationship, brought together.
+                  </h3>
+                  <p className="mt-5 text-sm leading-7 text-muted-foreground">
+                    Move beyond email threads and disconnected documents. Investor Suite brings opportunity discovery,
+                    underwriting tools, mandates, orders, documents and portfolio information into a single private client experience.
+                  </p>
+
+                  <div className="mt-8 space-y-5">
+                    {[
+                      ['Discover', 'Criteria-led access to curated property opportunities.'],
+                      ['Investment Studio', 'Model assumptions, financing scenarios and potential exits.'],
+                      ['Mandates & Orders', 'Keep instructions, commissioned briefs and progress organised.'],
+                      ['Documents & Portfolio', 'Access permitted materials and review your investment activity.'],
+                    ].map(([title, description], index) => (
+                      <div key={title} className="flex gap-4 border-t border-[#D8D1C5] pt-4">
+                        <span className="font-display text-sm text-gold">0{index + 1}</span>
+                        <div>
+                          <h4 className="text-xs font-semibold uppercase tracking-[0.13em] text-primary">{title}</h4>
+                          <p className="mt-1 text-xs leading-6 text-muted-foreground">{description}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="mt-9 flex flex-wrap gap-3">
+                    <Link
+                      href={isAuthenticated ? '/portal' : '#access'}
+                      className="inline-flex min-h-12 items-center justify-center gap-3 bg-primary px-6 py-3 text-[10px] font-semibold uppercase tracking-[0.17em] text-ivory transition-colors hover:bg-forest-deep"
+                    >
+                      {isAuthenticated ? 'Enter Investor Suite' : 'Request private access'}
+                      <ArrowRight className="h-4 w-4" />
+                    </Link>
+                    {!isAuthenticated && (
+                      <AuthTrigger mode="signin" variant="outline">Client sign-in</AuthTrigger>
+                    )}
+                  </div>
+                </div>
+
+                <div className="relative flex min-h-[420px] items-center justify-center overflow-hidden bg-[#E6E2D9] p-6 sm:p-10 lg:col-span-7 lg:min-h-[650px]">
+                  <div className="absolute left-1/2 top-1/2 h-[75%] w-[75%] -translate-x-1/2 -translate-y-1/2 rounded-full border border-gold/20" aria-hidden="true" />
+                  <div className="absolute left-1/2 top-1/2 h-[58%] w-[58%] -translate-x-1/2 -translate-y-1/2 rounded-full border border-gold/20" aria-hidden="true" />
+                  <div className="relative z-10 w-full max-w-[760px] overflow-hidden rounded-[18px] border border-[#B8B1A5] bg-white shadow-[0_30px_80px_rgba(23,37,29,0.18)]">
+                    <div className="flex h-9 items-center gap-1.5 border-b border-[#E8E5DF] bg-[#FAF9F6] px-4">
+                      <span className="h-2 w-2 rounded-full bg-[#D6CFC3]" />
+                      <span className="h-2 w-2 rounded-full bg-[#D6CFC3]" />
+                      <span className="h-2 w-2 rounded-full bg-[#D6CFC3]" />
+                      <span className="ml-3 text-[9px] tracking-[0.12em] text-[#8B887F]">INVESTORS.MURIVEST.COM</span>
+                    </div>
+                    <Image
+                      src="/investor-suite.png"
+                      alt="Murivest Investor Suite dashboard showing the private investor workspace and its investment modules"
+                      width={857}
+                      height={592}
+                      priority
+                      className="block h-auto w-full object-cover object-top"
+                      sizes="(max-width: 1024px) 90vw, 760px"
+                    />
+                  </div>
+                  <div className="absolute bottom-5 left-5 border border-[#D5CCBD] bg-[#F8F7F3]/95 px-4 py-3 backdrop-blur-sm sm:bottom-8 sm:left-8">
+                    <p className="text-[8px] font-semibold uppercase tracking-[0.25em] text-gold">Murivest Group</p>
+                    <p className="mt-1 font-display text-sm text-primary">Investor Suite · Private client access</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-6 flex flex-col justify-between gap-3 border-t border-[#DED8CC] pt-5 sm:flex-row sm:items-center">
+                <p className="text-[9px] uppercase tracking-[0.2em] text-muted-foreground">Private access · Permission-based information · Client-specific experience</p>
+                <a href="https://investors.murivest.com" className="inline-flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-primary transition-colors hover:text-gold">
+                  Visit Investor Suite <ArrowRight className="h-3.5 w-3.5" />
+                </a>
+              </div>
             </div>
           </section>
 
@@ -343,7 +441,7 @@ export default async function LandingPage() {
               </p>
 
               <p className="mt-6 text-[15px]">
-                So let me ask the question our best clients asked before their first mandate with us: when you
+                So let me ask the question a careful principal should ask before issuing a mandate: when you
                 write that cheque, <strong className="text-primary">what exactly are you buying?</strong>
               </p>
 
@@ -355,7 +453,7 @@ export default async function LandingPage() {
               </p>
 
               <p className="mt-6 text-[15px]">
-                We built Murivest differently, and this portal is the honest expression of it. {COMPANY.legalName} is
+                We built Murivest differently, and Investor Suite is the digital expression of that approach. {COMPANY.legalName} is
                 an international commercial real estate services and investment firm — principal offices in Nairobi
                 and London, Grade A income-producing assets, fiduciary standards, KYC/AML verified. We do not pool
                 capital. We do not operate collective investment schemes. Every engagement is direct, non-pooled
@@ -364,7 +462,7 @@ export default async function LandingPage() {
               </p>
 
               <p className="mt-6 text-[15px]">
-                This portal exists to answer six questions we believe you should never have to ask twice: what
+                Investor Suite is designed to answer six questions we believe you should never have to ask twice: what
                 exclusive or better-structured opportunities exist right now; can I see institutional underwriting
                 and stress tests before I commit; can I model capital structure, leverage and exits myself; can I
                 order a deep institutional brief — and pay for it — in minutes; is every interaction, document and
@@ -399,7 +497,7 @@ export default async function LandingPage() {
                   href={MANUAL_PATH}
                   className="inline-flex items-center gap-2 border border-border px-5 py-3 text-[11px] font-semibold uppercase tracking-[0.16em] text-primary transition-colors hover:border-gold hover:text-gold"
                 >
-                  <BookOpen className="h-4 w-4" /> Download the portal manual (PDF)
+                  <BookOpen className="h-4 w-4" /> Download the Investor Suite manual (PDF)
                 </a>
               </div>
             </article>
@@ -415,7 +513,7 @@ export default async function LandingPage() {
                 </h2>
                 <p className="mt-4 text-sm leading-relaxed text-muted-foreground">
                   The letter above is written. This is spoken. Watch it the way you would size up a counterparty
-                  across a boardroom table — then judge the portal on what it does, not what it says.
+                  across a boardroom table — then judge Investor Suite on what it does, not what it says.
                 </p>
               </div>
 
@@ -459,7 +557,7 @@ export default async function LandingPage() {
                   <ol className="space-y-6">
                     {[
                       'Who Murivest is — and what it refuses to be: a pooled fund, a listing site, a pressure desk.',
-                      'How the portal actually works: verification, discovery, underwriting, modelling, ordering, closing.',
+                      'How Investor Suite actually works: verification, discovery, underwriting, modelling, ordering, closing.',
                       'The honest limits of what we do — and the safeguards behind them: KYC/AML, NDA, watermarked documents, audit trails.',
                     ].map((item, i) => (
                       <li key={item.slice(0, 20)} className="flex gap-4">
@@ -480,7 +578,7 @@ export default async function LandingPage() {
                       href={MANUAL_PATH}
                       className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-primary transition-colors hover:text-gold"
                     >
-                      <BookOpen className="h-4 w-4 text-gold" /> Step-by-step portal manual (PDF)
+                      <BookOpen className="h-4 w-4 text-gold" /> Step-by-step Investor Suite manual (PDF)
                     </a>
                   </div>
                 </div>
@@ -491,12 +589,12 @@ export default async function LandingPage() {
           {/* ================= SIX ANSWERS ================= */}
           <section id="platform" className="mx-auto max-w-6xl px-6 py-20 lg:px-10 lg:py-24">
             <div className="mb-12 max-w-2xl">
-              <div className="eyebrow mb-3">The platform</div>
+              <div className="eyebrow mb-3">Investor Suite</div>
               <h2 className="font-display text-3xl text-primary lg:text-4xl">
                 Six questions a serious principal asks. Twelve modules that answer them.
               </h2>
               <p className="mt-4 text-sm leading-relaxed text-muted-foreground">
-                One confidential environment — Discover, Investment Studio, Compare, Orders, My Investments,
+                One confidential Investor Suite environment — Discover, Investment Studio, Compare, Orders, My Investments,
                 Mandates, Documents, Market Intelligence, Activity, Profile, Security — designed for investors who
                 deploy eight-to-nine-figure sums into income-producing commercial assets.
               </p>
@@ -686,7 +784,7 @@ export default async function LandingPage() {
             <div className="mt-8 border border-border bg-card p-8 text-left sm:p-10">
               <div className="font-display text-lg italic text-primary">P.S. — not ready to request access yet?</div>
               <p className="mt-4 max-w-2xl text-sm leading-relaxed text-muted-foreground">
-                Take the manual instead. It walks through every module of the portal — how to discover, underwrite,
+                Take the manual instead. It walks through every module of Investor Suite — how to discover, underwrite,
                 model, order, mandate and close — step by step, before you share anything with us. If you would
                 rather hear it in person first, the Director&rsquo;s word-for-word video script is here too. No
                 form, no email required, no follow-up.
@@ -696,7 +794,7 @@ export default async function LandingPage() {
                   href={MANUAL_PATH}
                   className="inline-flex items-center gap-2 border border-gold/40 bg-gold/10 px-5 py-3 text-[11px] font-semibold uppercase tracking-[0.16em] text-primary transition-colors hover:border-gold hover:text-gold"
                 >
-                  <BookOpen className="h-4 w-4 text-gold" /> Download the investor manual (PDF)
+                  <BookOpen className="h-4 w-4 text-gold" /> Download the Investor Suite manual (PDF)
                 </a>
                 <a
                   href={SCRIPT_PATH}
@@ -751,7 +849,7 @@ export default async function LandingPage() {
               </p>
               <p>
                 <a href={MANUAL_PATH} className="text-ivory/80 transition-colors hover:text-gold">
-                  Investor portal manual (PDF)
+                  Investor Suite manual (PDF)
                 </a>
               </p>
               <p>
@@ -768,7 +866,7 @@ export default async function LandingPage() {
             <div className="text-xs leading-relaxed text-ivory/60">
               <div className="eyebrow mb-3 !text-gold/70">Notice</div>
               <p className="text-ivory/45">
-                Confidential environment. Murivest does not pool capital or operate collective investment schemes.
+                Confidential Investor Suite environment. Murivest does not pool capital or operate collective investment schemes.
                 All engagements proceed under fiduciary standards, applicable KYC/AML requirements and formal scope
                 documentation. Communications may be monitored for security purposes under applicable law.
               </p>

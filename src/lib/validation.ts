@@ -158,7 +158,7 @@ export const orderSchema = z.object({
   amountKes: z.number().min(0).max(1e9),
   amountUsd: z.number().min(0).max(1e9),
   currency: z.enum(['KES', 'USD']),
-  paymentMethod: z.enum(['mpesa', 'wire', 'card']).nullable().optional(),
+  paymentMethod: z.enum(['mpesa', 'wire', 'card', 'paypal']).nullable().optional(),
   shippingAddress: z.string().trim().max(500).nullable().optional(),
   phone: z.string().trim().max(40).nullable().optional(),
 })
@@ -171,6 +171,11 @@ export const mpesaConfirmationSchema = z.object({
 export const wireConfirmationSchema = z.object({
   orderId: z.string().min(5).max(64),
   bankReference: z.string().trim().min(4).max(120),
+})
+
+export const paypalConfirmationSchema = z.object({
+  orderId: z.string().min(5).max(64),
+  paypalEmail: z.string().email().optional(),
 })
 
 // --- Communications --------------------------------------------------------

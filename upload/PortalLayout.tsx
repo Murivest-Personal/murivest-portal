@@ -12,7 +12,7 @@ import NotificationBell from '@/components/portal/NotificationBell'
 const navItems = [
   { href: '/portal', label: 'Overview' },
   { href: '/portal/dashboard', label: 'Dashboard' },
-  { href: '/portal/briefs', label: 'Briefs' },
+  { href: '/portal/property-briefs', label: 'Briefs' },
   { href: '/portal/off-market', label: 'Off-Market' },
   { href: '/portal/publications', label: 'Intelligence' },
   { href: '/portal/orders', label: 'Orders' },

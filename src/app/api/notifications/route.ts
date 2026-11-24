@@ -10,8 +10,35 @@ import type {NotificationRow} from '@/lib/db-types'
 
 const schema = z.object({ids: z.array(z.string().max(64)).max(100).optional(), all: z.boolean().optional()})
 
+/** Classify transient upstream failures (Supabase TLS reset, DNS blip, socket close). */
+function isTransientNetworkError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false
+  const m = err.message.toLowerCase()
+  return (
+    m.includes('fetch failed') ||
+    m.includes('econnreset') ||
+    m.includes('etimedout') ||
+    m.includes('econnrefused') ||
+    m.includes('socket disconnected') ||
+    m.includes('network')
+  )
+}
+
+/** 503 + Retry-After for transient failures; re-throw anything else. */
+function transientFallback(err: unknown): NextResponse {
+  if (isTransientNetworkError(err)) {
+    // eslint-disable-next-line no-console
+    console.warn('[api/notifications] transient upstream failure:', (err as Error).message)
+    return NextResponse.json(
+      {ok: false, error: 'Notifications service is temporarily unavailable. Please retry.'},
+      {status: 503, headers: {'Retry-After': '5'}},
+    )
+  }
+  throw err
+}
+
 /** POST — mark notifications read (single, batch, or all). */
-export async function POST(req: NextRequest) {
+async function handlePost(req: NextRequest): Promise<NextResponse> {
   const guard = await requireApiUser()
   if (isResponse(guard)) return guard.response
   const parsed = await parseBody(req, schema)
@@ -58,7 +85,7 @@ export async function POST(req: NextRequest) {
  * VAPID available) and the effective category matrix so the centre can hint
  * at suppressed channels.
  */
-export async function GET(req: NextRequest) {
+async function handleGet(req: NextRequest): Promise<NextResponse> {
   const guard = await requireApiUser()
   if (isResponse(guard)) return guard.response
   const userId = guard.ctx.user.id
@@ -93,4 +120,20 @@ export async function GET(req: NextRequest) {
       quietHours: prefs.quietStartMin != null && prefs.quietEndMin != null,
     },
   })
+}
+
+export async function POST(req: NextRequest) {
+  try {
+    return await handlePost(req)
+  } catch (err) {
+    return transientFallback(err)
+  }
+}
+
+export async function GET(req: NextRequest) {
+  try {
+    return await handleGet(req)
+  } catch (err) {
+    return transientFallback(err)
+  }
 }

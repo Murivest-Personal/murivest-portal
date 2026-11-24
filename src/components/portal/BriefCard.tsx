@@ -37,7 +37,7 @@ export function priceLabel(
 export function BriefCard({brief}: {brief: BriefRow}) {
   const digital = priceLabel(brief.digitalKes, brief.digitalUsd, brief.digitalDownloadAvailable)
   const hard = priceLabel(brief.hardKes, brief.hardUsd, brief.hardCopyAvailable)
-  const href = `/portal/briefs/${brief.slug ?? brief.id}`
+  const href = `/portal/property-briefs/${brief.slug ?? brief.id}`
 
   return (
     <article className="rounded-card flex flex-col overflow-hidden border border-border bg-card shadow-card">
@@ -101,7 +101,7 @@ export function BriefCard({brief}: {brief: BriefRow}) {
           </Link>
           {brief.linkedOpportunityId ? (
             <Link
-              href={`/portal/opportunities/${brief.linkedOpportunityId}`}
+              href={`/portal/property-briefs/${brief.linkedOpportunityId}`}
               className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground transition-colors hover:text-primary"
             >
               Linked opportunity
